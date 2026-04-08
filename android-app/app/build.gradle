@@ -1,0 +1,55 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+android {
+    namespace 'com.aggregator.socialinbox'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.aggregator.socialinbox"
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+
+        // Supabase: env vars > gradle.properties > supabase.properties (see supabase.properties.example)
+        def supaProps = new Properties()
+        def supaFile = rootProject.file('supabase.properties')
+        if (supaFile.exists()) {
+            supaFile.withInputStream { supaProps.load(it) }
+        }
+        def supabaseUrl = System.getenv("SUPABASE_URL")
+                ?: (project.findProperty("SUPABASE_URL") ?: supaProps.getProperty("SUPABASE_URL", ""))
+        def supabaseKey = System.getenv("SUPABASE_SERVICE_ROLE_KEY")
+                ?: (project.findProperty("SUPABASE_SERVICE_ROLE_KEY") ?: supaProps.getProperty("SUPABASE_SERVICE_ROLE_KEY", ""))
+        def supabaseAnonKey = System.getenv("SUPABASE_ANON_KEY")
+                ?: (project.findProperty("SUPABASE_ANON_KEY") ?: supaProps.getProperty("SUPABASE_ANON_KEY", ""))
+        def esc = { s -> (s ?: "").toString().replace('"', '\\"') }
+        buildConfigField "String", "SUPABASE_URL", "\"${esc(supabaseUrl)}\""
+        buildConfigField "String", "SUPABASE_SERVICE_ROLE_KEY", "\"${esc(supabaseKey)}\""
+        buildConfigField "String", "SUPABASE_ANON_KEY", "\"${esc(supabaseAnonKey)}\""
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
+}
+
+dependencies {
+    implementation 'androidx.core:core-ktx:1.9.0'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'com.google.android.material:material:1.8.0'
+    implementation 'com.squareup.okhttp3:okhttp:4.10.0'
+}

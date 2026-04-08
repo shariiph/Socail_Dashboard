@@ -1,0 +1,14 @@
+# Deploy the Next.js dashboard from the monorepo root.
+# Set in Netlify → Site settings → Environment variables:
+#   NEXT_PUBLIC_SUPABASE_URL
+#   NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+[build]
+  base = "web-dashboard"
+  command = "npm install && npm run build"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"

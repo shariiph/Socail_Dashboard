@@ -1,0 +1,7 @@
+# Copy to supabase.properties (do not commit supabase.properties).
+# Rebuild the APK after editing.
+
+SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+# Optional fallback if you do not use service role (RLS must allow inserts):
+# SUPABASE_ANON_KEY=your-anon-key

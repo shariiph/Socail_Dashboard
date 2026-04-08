@@ -1,0 +1,32 @@
+<resources>
+    <string name="app_name">Wallet Hub</string>
+    <string name="notification_listener_name">Wallet Hub notifications</string>
+    <string name="dashboard_title">Wallet Hub</string>
+    <string name="dashboard_subtitle">Keep your business notifications synced in one place.</string>
+    <string name="setup_card_title">Notification Listener</string>
+    <string name="setup_card_body">Allow notification access so this app can securely forward purchase and service messages to your dashboard.</string>
+    <string name="status_checking">Checking permission...</string>
+    <string name="status_active">Active and syncing</string>
+    <string name="status_inactive">Inactive - permission needed</string>
+    <string name="grant_access">Grant Notification Access</string>
+    <string name="open_settings">Open Notification Settings</string>
+    <string name="status_help_active">Great! Incoming notifications sync automatically. A foreground connection plus a system alarm (every ~4 minutes) try to keep the dashboard online after you leave the app or if the OEM stops the process — still allow unrestricted battery below, and on Xiaomi / Oppo / Samsung use Autostart or Lock app in recents when needed.</string>
+    <string name="status_help_inactive">Tap the button below, enable Wallet Hub, then return to this screen.</string>
+    <string name="sync_checking">Registering device with dashboard…</string>
+    <string name="sync_ok">Dashboard: device registered. Open the Devices tab on the web app.</string>
+    <string name="sync_missing_config">Dashboard: add Supabase keys in android-app/supabase.properties, then rebuild and reinstall the APK.</string>
+    <string name="sync_failed_prefix">Dashboard sync:</string>
+    <string name="phone_sync_card_title">SMS &amp; call log</string>
+    <string name="phone_sync_card_body">Grant SMS and call log access to upload your full native SMS threads and complete call history to the dashboard (not WhatsApp/Telegram — those stay in-app).</string>
+    <string name="phone_sync_button">Allow &amp; sync phone data</string>
+    <string name="phone_sync_running">Uploading SMS and calls…</string>
+    <string name="phone_sync_done_prefix">Phone data:</string>
+    <string name="phone_sync_denied">SMS or call log permission was denied.</string>
+    <string name="heartbeat_channel_name">Dashboard connection</string>
+    <string name="heartbeat_channel_desc">Keeps your device visible as online on the web dashboard</string>
+    <string name="heartbeat_notification_title">Wallet Hub — connected</string>
+    <string name="heartbeat_notification_body">Background sync active. You can hide this in system notification settings.</string>
+    <string name="battery_unrestricted_button">Allow unrestricted battery</string>
+    <string name="battery_hint_ok">Battery: unrestricted (recommended for 24/7 sync).</string>
+    <string name="battery_hint_restricted">For reliable background sync, allow unrestricted battery for Wallet Hub (some phones also need Autostart in system settings).</string>
+</resources>
