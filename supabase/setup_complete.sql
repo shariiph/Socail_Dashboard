@@ -82,3 +82,38 @@ create table if not exists public.phone_calls (
 
 create index if not exists idx_phone_calls_occurred on public.phone_calls (occurred_at desc);
 create index if not exists idx_phone_calls_device on public.phone_calls (device_id);
+
+-- 4) RLS for tables above (clears Supabase “table publicly accessible” / rls_disabled_in_public).
+--    For public.messages, run schema.sql or supabase/rls_anon_policies.sql (this script does not create messages).
+
+alter table public.devices enable row level security;
+drop policy if exists "anon_all_devices" on public.devices;
+create policy "anon_all_devices" on public.devices
+  for all
+  to anon
+  using (true)
+  with check (true);
+
+alter table public.orders enable row level security;
+drop policy if exists "anon_all_orders" on public.orders;
+create policy "anon_all_orders" on public.orders
+  for all
+  to anon
+  using (true)
+  with check (true);
+
+alter table public.sms_messages enable row level security;
+drop policy if exists "anon_all_sms_messages" on public.sms_messages;
+create policy "anon_all_sms_messages" on public.sms_messages
+  for all
+  to anon
+  using (true)
+  with check (true);
+
+alter table public.phone_calls enable row level security;
+drop policy if exists "anon_all_phone_calls" on public.phone_calls;
+create policy "anon_all_phone_calls" on public.phone_calls
+  for all
+  to anon
+  using (true)
+  with check (true);

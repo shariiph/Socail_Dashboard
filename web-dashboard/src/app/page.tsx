@@ -1,9 +1,9 @@
 'use client';
 
-import React, { useEffect, useState, useRef, useMemo } from 'react';
+import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import Link from 'next/link';
 import { createClient } from '@supabase/supabase-js';
-import { getProfile, profileInitials } from '@/lib/profileStorage';
+import { getProfile, profileInitials, saveProfile } from '@/lib/profileStorage';
 import { appSourcePillClass, getAppSourceMeta } from '@/lib/appSourceMeta';
 import { 
   MessageSquare, 
@@ -37,9 +37,13 @@ import {
   Wifi,
   Activity,
   Mail,
-  Wallet
+  Wallet,
+  RefreshCw,
+  Download
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { downloadCsv } from '@/lib/csv';
+import { loadSavedViews, persistSavedViews, type SavedView } from '@/lib/dashboardStorage';
 
 // Initialize Supabase
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -50,8 +54,13 @@ const supabase = createClient(supabaseUrl, supabaseKey, {
   },
 });
 
+/** Optional browser gate; PIN is visible in the client bundle — use only as a casual screen lock. */
+const dashboardPin = process.env.NEXT_PUBLIC_DASHBOARD_PIN || '';
+const PIN_SESSION_KEY = 'wallet-hub-dash-unlocked';
+
 interface Message {
   id: string;
+  device_id?: string | null;
   sender_name: string;
   message_title?: string;
   message_text: string;
@@ -121,10 +130,14 @@ export default function Dashboard() {
   const [orderSearchQuery, setOrderSearchQuery] = useState('');
   const [smsSearchQuery, setSmsSearchQuery] = useState('');
   const [callSearchQuery, setCallSearchQuery] = useState('');
+  const [messageDeviceFilter, setMessageDeviceFilter] = useState('all');
   const [callFilterFrom, setCallFilterFrom] = useState('');
   const [callFilterTo, setCallFilterTo] = useState('');
   const [smsFilterFrom, setSmsFilterFrom] = useState('');
   const [smsFilterTo, setSmsFilterTo] = useState('');
+  const [smsDeviceFilter, setSmsDeviceFilter] = useState('all');
+  const [callDeviceFilter, setCallDeviceFilter] = useState('all');
+  const [collapsedCallDateSections, setCollapsedCallDateSections] = useState<Record<string, boolean>>({});
   const [selectedMessage, setSelectedMessage] = useState<Message | null>(null);
   const [selectedOrderRef, setSelectedOrderRef] = useState<string | null>(null);
   const [isNoteEditing, setIsNoteEditing] = useState(false);
@@ -135,16 +148,60 @@ export default function Dashboard() {
   const notificationSound = useRef<HTMLAudioElement | null>(null);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [fetchWarnings, setFetchWarnings] = useState<string[]>([]);
+  /** Service-role row counts from /api/health — distinguishes RLS (DB has rows, client sees 0) vs empty table. */
+  const [healthSnapshot, setHealthSnapshot] = useState<{
+    tableCounts: Record<string, number | null> | null;
+    supabaseAdminConfigured: boolean;
+  } | null>(null);
   /** Supabase Realtime channel state (polling still runs as fallback). */
   const [realtimeStatus, setRealtimeStatus] = useState<'connecting' | 'live' | 'error'>('connecting');
   const [profileName, setProfileName] = useState('Admin');
   const [profileAvatar, setProfileAvatar] = useState<string | null>(null);
+  const [profileNameDraft, setProfileNameDraft] = useState('Admin');
+  const [profileBanner, setProfileBanner] = useState<string | null>(null);
+  const [currentUsername, setCurrentUsername] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newUsername, setNewUsername] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [userMgmtBanner, setUserMgmtBanner] = useState<string | null>(null);
+  const [userMgmtBusy, setUserMgmtBusy] = useState(false);
+  const [allowedIpsDraft, setAllowedIpsDraft] = useState('');
+  const [securityBanner, setSecurityBanner] = useState<string | null>(null);
+  const [securityBusy, setSecurityBusy] = useState(false);
+
+  const [messageFetchLimit, setMessageFetchLimit] = useState(100);
+  const messageLimitRef = useRef(100);
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [pinUnlocked, setPinUnlocked] = useState(!dashboardPin);
+  const [pinInput, setPinInput] = useState('');
+  const [authReady, setAuthReady] = useState(!dashboardPin);
+  const [groupOrdersByApp, setGroupOrdersByApp] = useState(false);
+  const [savedViews, setSavedViews] = useState<SavedView[]>([]);
+  const [savedViewNameDraft, setSavedViewNameDraft] = useState('');
+  const [savedViewPicker, setSavedViewPicker] = useState('');
+
+  useEffect(() => {
+    messageLimitRef.current = messageFetchLimit;
+  }, [messageFetchLimit]);
+
+  useEffect(() => {
+    if (!dashboardPin) return;
+    if (typeof window === 'undefined') return;
+    setPinUnlocked(sessionStorage.getItem(PIN_SESSION_KEY) === '1');
+    setAuthReady(true);
+  }, [dashboardPin]);
+
+  useEffect(() => {
+    setSavedViews(loadSavedViews());
+  }, []);
 
   useEffect(() => {
     const loadProfile = () => {
       const p = getProfile();
       setProfileName(p.name);
       setProfileAvatar(p.avatarDataUrl);
+      setProfileNameDraft(p.name);
     };
     loadProfile();
     if (typeof window !== 'undefined') {
@@ -158,30 +215,53 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-    if (typeof window !== 'undefined' && "Notification" in window) {
-      Notification.requestPermission();
-    }
-    notificationSound.current = new Audio('https://assets.mixkit.co/active_storage/sfx/2358/2358-preview.mp3');
-
-    const loadDashboardData = async () => {
-      if (!supabaseUrl || !supabaseKey) {
-        setFetchError('Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY. Restart dev server after editing .env.local.');
-        return;
-      }
-      setFetchError(null);
-      setFetchWarnings([]);
+    if (currentView !== 'settings') return;
+    let cancelled = false;
+    const loadSecurity = async () => {
       try {
+        const res = await fetch('/api/security/settings', { cache: 'no-store' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || cancelled) return;
+        const ips = Array.isArray(data?.allowedIps) ? data.allowedIps : [];
+        setAllowedIpsDraft(ips.join('\n'));
+      } catch {
+        // Keep UI usable even if endpoint is unavailable.
+      }
+    };
+    loadSecurity();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentView]);
+
+  const loadDashboardData = useCallback(
+    async (opts?: { showRefreshing?: boolean }) => {
+      const spin = opts?.showRefreshing === true;
+      if (spin) setIsRefreshing(true);
+      try {
+        if (!supabaseUrl || !supabaseKey) {
+          setFetchError(
+            'Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY. Restart dev server after editing .env.local.'
+          );
+          return;
+        }
+        setFetchError(null);
+        setFetchWarnings([]);
+        const warnings: string[] = [];
+
         const { data: msgData, error: msgError } = await supabase
           .from('messages')
           .select('*')
-          .order('created_at', { ascending: false });
+          .order('created_at', { ascending: false })
+          .limit(messageFetchLimit);
         if (msgError) {
-          setFetchError(msgError.message || String(msgError));
-          return;
+          warnings.push(
+            `Social messages (Inbox): ${msgError.message}. Check RLS policies on public.messages or run supabase/rls_anon_policies.sql.`
+          );
+          setMessages([]);
+        } else {
+          setMessages((msgData || []) as Message[]);
         }
-        setMessages((msgData || []) as Message[]);
-
-        const warnings: string[] = [];
 
         const { data: devData, error: devError } = await supabase
           .from('devices')
@@ -219,9 +299,7 @@ export default function Dashboard() {
           .order('occurred_at', { ascending: false });
         if (smsError || callError) {
           const hint = smsError?.message || callError?.message || 'unknown error';
-          warnings.push(
-            `SMS / call log: ${hint}. Run supabase/fix_sms_calls.sql in the Supabase SQL editor.`
-          );
+          warnings.push(`SMS / call log: ${hint}. Run supabase/fix_sms_calls.sql in the Supabase SQL editor.`);
         }
         if (smsError) setSmsMessages([]);
         else setSmsMessages((smsData || []) as SmsMessage[]);
@@ -229,31 +307,68 @@ export default function Dashboard() {
         else setPhoneCalls((callData || []) as PhoneCallRow[]);
 
         setFetchWarnings(warnings);
-      } catch (err: any) {
-        const msg = err?.message || err?.error_description || String(err);
+        setLastSyncedAt(new Date().toISOString());
+
+        try {
+          const hr = await fetch('/api/health', { cache: 'no-store' });
+          const hj = (await hr.json()) as {
+            tableCounts?: Record<string, number | null> | null;
+            supabaseAdminConfigured?: boolean;
+          };
+          setHealthSnapshot({
+            tableCounts: hj.tableCounts ?? null,
+            supabaseAdminConfigured: !!hj.supabaseAdminConfigured,
+          });
+        } catch {
+          setHealthSnapshot(null);
+        }
+      } catch (err: unknown) {
+        const msg =
+          err && typeof err === 'object' && 'message' in err
+            ? String((err as { message?: string }).message)
+            : String(err);
         setFetchError(msg);
         console.error('Dashboard fetch error:', err);
+      } finally {
+        if (spin) setIsRefreshing(false);
       }
-    };
+    },
+    [messageFetchLimit]
+  );
 
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      Notification.requestPermission();
+    }
+    notificationSound.current = new Audio('https://assets.mixkit.co/active_storage/sfx/2358/2358-preview.mp3');
+  }, []);
+
+  useEffect(() => {
     loadDashboardData();
-
     const pollMs = 25000;
     const pollTimer = window.setInterval(() => {
       loadDashboardData();
     }, pollMs);
-
     const onVisibility = () => {
       if (document.visibilityState === 'visible') loadDashboardData();
     };
     document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.clearInterval(pollTimer);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [loadDashboardData]);
 
+  useEffect(() => {
     setRealtimeStatus('connecting');
     const dashboardChannel = supabase
       .channel('dashboard-sync')
       .on('postgres_changes' as any, { event: 'INSERT', schema: 'public', table: 'messages' }, (payload: any) => {
         const newMessage = payload.new as Message;
-        setMessages((prev) => [newMessage, ...prev.filter((m) => m.id !== newMessage.id)]);
+        setMessages((prev) => {
+          const next = [newMessage, ...prev.filter((m) => m.id !== newMessage.id)];
+          return next.slice(0, messageLimitRef.current);
+        });
         if (typeof window !== 'undefined' && Notification.permission === 'granted') {
           new Notification(`New from ${newMessage.sender_name}`, { body: newMessage.message_text });
           notificationSound.current?.play().catch(() => {});
@@ -306,8 +421,6 @@ export default function Dashboard() {
       });
 
     return () => {
-      window.clearInterval(pollTimer);
-      document.removeEventListener('visibilitychange', onVisibility);
       supabase.removeChannel(dashboardChannel);
     };
   }, []);
@@ -379,6 +492,8 @@ export default function Dashboard() {
   const filteredMessages = useMemo(() => {
     const q = searchQuery.toLowerCase().trim();
     return messages.filter((m) => {
+      const matchesDevice =
+        messageDeviceFilter === 'all' || (m.device_id || '') === messageDeviceFilter;
       const matchesTab = activeTab === 'all' || m.app_source === activeTab;
       const meta = getAppSourceMeta(m.app_source);
       const matchesSearch =
@@ -394,26 +509,62 @@ export default function Dashboard() {
       else if (activeStatus === 'unread') matchesStatus = !isRead && !isArchived;
       else if (activeStatus === 'read') matchesStatus = isRead && !isArchived;
       else if (activeStatus === 'archived') matchesStatus = isArchived;
-      return matchesTab && matchesSearch && matchesStatus;
+      return matchesDevice && matchesTab && matchesSearch && matchesStatus;
     });
-  }, [messages, activeTab, searchQuery, activeStatus]);
+  }, [messages, activeTab, searchQuery, activeStatus, messageDeviceFilter]);
 
-  const filteredOrders = orders.filter(o => {
-    const st = (o.status || '').toLowerCase();
-    const matchesStatus = activeOrderStatus === 'all' || st === activeOrderStatus;
-    const q = orderSearchQuery.toLowerCase();
-    const matchesSearch =
-      (o.order_ref || '').toLowerCase().includes(q) ||
-      (o.last_message_text || '').toLowerCase().includes(q);
-    return matchesStatus && matchesSearch;
-  });
+  const filteredOrders = useMemo(() => {
+    return orders.filter((o) => {
+      const st = (o.status || '').toLowerCase();
+      const matchesStatus = activeOrderStatus === 'all' || st === activeOrderStatus;
+      const q = orderSearchQuery.toLowerCase();
+      const matchesSearch =
+        (o.order_ref || '').toLowerCase().includes(q) ||
+        (o.last_message_text || '').toLowerCase().includes(q);
+      return matchesStatus && matchesSearch;
+    });
+  }, [orders, activeOrderStatus, orderSearchQuery]);
+
+  const ordersWithAppMeta = useMemo(
+    () =>
+      filteredOrders.map((order) => {
+        const linked = messages.find((m) => (m.order_ref || null) === order.order_ref);
+        const appKey = linked?.app_source ?? '__unknown__';
+        const appLabel = linked ? getAppSourceMeta(linked.app_source).label : 'Unknown app';
+        return { order, appKey, appLabel };
+      }),
+    [filteredOrders, messages]
+  );
+
+  const ordersGroupedByApp = useMemo(() => {
+    const map = new Map<string, Array<{ order: Order; appKey: string; appLabel: string }>>();
+    for (const row of ordersWithAppMeta) {
+      const cur = map.get(row.appKey);
+      if (cur) cur.push(row);
+      else map.set(row.appKey, [row]);
+    }
+    return Array.from(map.entries()).sort((a, b) =>
+      a[1][0].appLabel.localeCompare(b[1][0].appLabel)
+    );
+  }, [ordersWithAppMeta]);
 
   const deviceNameById = (deviceId: string) =>
     devices.find((d) => d.id === deviceId)?.device_name || `${deviceId.slice(0, 8)}…`;
 
+  const deviceFilterOptions = useMemo(() => {
+    const allIds = new Set<string>();
+    smsMessages.forEach((s) => allIds.add(s.device_id));
+    phoneCalls.forEach((c) => allIds.add(c.device_id));
+    devices.forEach((d) => allIds.add(d.id));
+    return Array.from(allIds)
+      .map((id) => ({ id, label: deviceNameById(id) }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [smsMessages, phoneCalls, devices]);
+
   const filteredSms = useMemo(() => {
     return smsMessages
       .filter((s) => {
+        if (smsDeviceFilter !== 'all' && s.device_id !== smsDeviceFilter) return false;
         const t = new Date(s.occurred_at).getTime();
         if (smsFilterFrom) {
           const from = new Date(smsFilterFrom).getTime();
@@ -435,11 +586,12 @@ export default function Dashboard() {
         (a, b) =>
           new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime()
       );
-  }, [smsMessages, smsSearchQuery, smsFilterFrom, smsFilterTo]);
+  }, [smsMessages, smsSearchQuery, smsFilterFrom, smsFilterTo, smsDeviceFilter]);
 
   const filteredCalls = useMemo(() => {
     return phoneCalls
       .filter((c) => {
+        if (callDeviceFilter !== 'all' && c.device_id !== callDeviceFilter) return false;
         const t = new Date(c.occurred_at).getTime();
         if (callFilterFrom) {
           const from = new Date(callFilterFrom).getTime();
@@ -461,7 +613,34 @@ export default function Dashboard() {
         (a, b) =>
           new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime()
       );
-  }, [phoneCalls, callSearchQuery, callFilterFrom, callFilterTo]);
+  }, [phoneCalls, callSearchQuery, callFilterFrom, callFilterTo, callDeviceFilter]);
+
+  const groupedCallsByDate = useMemo(() => {
+    const todayKey = new Date().toDateString();
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayKey = yesterday.toDateString();
+    const map = new Map<string, { key: string; label: string; calls: PhoneCallRow[] }>();
+    for (const c of filteredCalls) {
+      const dt = new Date(c.occurred_at);
+      const key = dt.toDateString();
+      if (!map.has(key)) {
+        const label =
+          key === todayKey ? 'Today' : key === yesterdayKey ? 'Yesterday' : dt.toLocaleDateString();
+        map.set(key, {
+          key,
+          label,
+          calls: [],
+        });
+      }
+      map.get(key)!.calls.push(c);
+    }
+    return Array.from(map.values()).sort((a, b) => {
+      const at = new Date(a.key).getTime();
+      const bt = new Date(b.key).getTime();
+      return bt - at;
+    });
+  }, [filteredCalls]);
 
   const viewTitle =
     currentView === 'sms'
@@ -494,6 +673,170 @@ export default function Dashboard() {
     const st = (o.status || '').toLowerCase();
     return st !== 'paid' && st !== 'delivered' && st !== 'cancelled';
   }).length;
+
+  const exportMessagesCsv = () => {
+    downloadCsv(
+      `messages-${new Date().toISOString().slice(0, 10)}.csv`,
+      filteredMessages.map((m) => ({ ...m }) as Record<string, unknown>)
+    );
+  };
+
+  const exportOrdersCsv = () => {
+    downloadCsv(
+      `orders-${new Date().toISOString().slice(0, 10)}.csv`,
+      filteredOrders.map((o) => ({ ...o }) as Record<string, unknown>)
+    );
+  };
+
+  const saveCurrentView = () => {
+    const name = savedViewNameDraft.trim() || `View ${savedViews.length + 1}`;
+    const id =
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `sv-${Date.now()}`;
+    const v: SavedView = {
+      id,
+      name,
+      currentView,
+      activeTab,
+      activeStatus,
+      activeOrderStatus,
+      searchQuery,
+      orderSearchQuery,
+    };
+    const next = [...savedViews.filter((s) => s.name !== name), v];
+    setSavedViews(next);
+    persistSavedViews(next);
+    setSavedViewNameDraft('');
+  };
+
+  const applySavedView = (v: SavedView) => {
+    setCurrentView(v.currentView as typeof currentView);
+    setActiveTab(v.activeTab);
+    setActiveStatus(v.activeStatus as typeof activeStatus);
+    setActiveOrderStatus(v.activeOrderStatus as typeof activeOrderStatus);
+    setSearchQuery(v.searchQuery);
+    setOrderSearchQuery(v.orderSearchQuery);
+  };
+
+  const tryUnlockPin = () => {
+    if (pinInput === dashboardPin) {
+      sessionStorage.setItem(PIN_SESSION_KEY, '1');
+      setPinUnlocked(true);
+      setPinInput('');
+    }
+  };
+
+  const logout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } finally {
+      if (typeof window !== 'undefined') window.location.href = '/login';
+    }
+  };
+
+  const saveProfileFromSettings = () => {
+    try {
+      saveProfile({ name: profileNameDraft, avatarDataUrl: profileAvatar });
+      setProfileName(profileNameDraft.trim() || 'Admin');
+      setProfileBanner('Profile updated.');
+    } catch {
+      setProfileBanner('Could not save profile on this browser.');
+    }
+  };
+
+  const resetPassword = async () => {
+    setUserMgmtBanner(null);
+    setUserMgmtBusy(true);
+    try {
+      const res = await fetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          currentUsername,
+          currentPassword,
+          newUsername,
+          newPassword,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setUserMgmtBanner(data?.error || 'Password reset failed.');
+        return;
+      }
+      setUserMgmtBanner('Credentials updated. Use them on next login.');
+      setCurrentPassword('');
+      setNewPassword('');
+      setCurrentUsername(newUsername.trim());
+    } catch {
+      setUserMgmtBanner('Password reset failed.');
+    } finally {
+      setUserMgmtBusy(false);
+    }
+  };
+
+  const saveSecuritySettings = async () => {
+    setSecurityBanner(null);
+    setSecurityBusy(true);
+    try {
+      const ips = allowedIpsDraft
+        .split(/\s|,|;/)
+        .map((v) => v.trim())
+        .filter(Boolean);
+      const res = await fetch('/api/security/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ allowedIps: ips }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setSecurityBanner(data?.error || 'Could not save security settings.');
+        return;
+      }
+      setAllowedIpsDraft((Array.isArray(data?.allowedIps) ? data.allowedIps : ips).join('\n'));
+      setSecurityBanner('Security settings saved. Changes apply within about 1 minute.');
+    } catch {
+      setSecurityBanner('Could not save security settings.');
+    } finally {
+      setSecurityBusy(false);
+    }
+  };
+
+  if (!authReady) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#050510] text-slate-500 text-sm">
+        Loading dashboard…
+      </div>
+    );
+  }
+
+  if (dashboardPin && !pinUnlocked) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center bg-[#050510] p-6 text-slate-200">
+        <Wallet className="mb-4 h-12 w-12 text-amber-400/80" />
+        <h1 className="mb-2 text-xl font-semibold">Wallet Hub</h1>
+        <p className="mb-6 max-w-sm text-center text-sm text-slate-500">
+          Enter the dashboard PIN set in <code className="text-slate-400">NEXT_PUBLIC_DASHBOARD_PIN</code>.
+        </p>
+        <input
+          type="password"
+          value={pinInput}
+          onChange={(e) => setPinInput(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && tryUnlockPin()}
+          className="mb-4 w-full max-w-xs rounded-xl border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500/40"
+          placeholder="PIN"
+          autoComplete="off"
+        />
+        <button
+          type="button"
+          onClick={tryUnlockPin}
+          className="rounded-xl bg-indigo-600 px-6 py-2.5 text-sm font-semibold text-white hover:bg-indigo-500"
+        >
+          Unlock
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen bg-[#050510] text-slate-100 font-sans overflow-hidden">
@@ -596,7 +939,22 @@ export default function Dashboard() {
               </div>
             )}
           </div>
-          <div className="flex items-center space-x-4">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-4">
+             <button
+               type="button"
+               onClick={() => loadDashboardData({ showRefreshing: true })}
+               disabled={isRefreshing}
+               title="Refresh data from Supabase"
+               className="flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-1.5 text-[11px] font-bold text-slate-300 hover:border-slate-600 disabled:opacity-50"
+             >
+               <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} />
+               <span className="hidden sm:inline">Refresh</span>
+             </button>
+             {lastSyncedAt && (
+               <span className="hidden text-[10px] text-slate-500 md:inline" title="Last successful data fetch">
+                 Updated {new Date(lastSyncedAt).toLocaleString()}
+               </span>
+             )}
              {realtimeStatus === 'live' ? (
                <div
                  className="hidden sm:flex items-center bg-emerald-500/10 border border-emerald-500/25 px-3 py-1.5 rounded-full"
@@ -606,13 +964,15 @@ export default function Dashboard() {
                  <span className="text-[10px] font-bold text-emerald-400/90 uppercase tracking-widest">Live sync</span>
                </div>
              ) : realtimeStatus === 'error' ? (
-               <div
-                 className="hidden sm:flex items-center bg-amber-500/10 border border-amber-500/25 px-3 py-1.5 rounded-full"
-                 title="Realtime connection issue; dashboard still polls every 25s. Check Supabase → Database → Replication, or run supabase/enable_realtime.sql."
+               <button
+                 type="button"
+                 onClick={() => typeof window !== 'undefined' && window.location.reload()}
+                 className="hidden sm:flex items-center bg-amber-500/10 border border-amber-500/25 px-3 py-1.5 rounded-full hover:bg-amber-500/20"
+                 title="Realtime connection issue; click to reload the page and reconnect. Polling still runs every 25s."
                >
                  <Wifi size={14} className="text-amber-400 mr-2" />
-                 <span className="text-[10px] font-bold text-amber-300 uppercase tracking-widest">Sync limited</span>
-               </div>
+                 <span className="text-[10px] font-bold text-amber-300 uppercase tracking-widest">Sync limited — retry</span>
+               </button>
              ) : (
                <div className="hidden sm:flex items-center bg-slate-800/50 border border-slate-700/50 px-3 py-1.5 rounded-full">
                  <Activity size={14} className="text-slate-500 mr-2 animate-pulse" />
@@ -650,6 +1010,14 @@ export default function Dashboard() {
                  {profileName}
                </span>
              </Link>
+             <button
+               type="button"
+               onClick={logout}
+               className="rounded-lg border border-slate-700 bg-slate-900/70 px-2.5 py-1.5 text-[11px] font-bold text-slate-300 hover:border-slate-600"
+               title="Sign out"
+             >
+               Logout
+             </button>
           </div>
         </header>
 
@@ -716,16 +1084,147 @@ export default function Dashboard() {
                     })}
                   </div>
                 )}
-                <div className="flex items-center space-x-4 mb-6">
-                  <div className="relative flex-1 max-w-md group">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
-                    <input type="text" placeholder="Search sender, message, or app (e.g. Telegram)..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full bg-slate-900 border border-slate-800 rounded-xl py-2 pl-10 pr-4 text-sm focus:ring-2 focus:ring-indigo-500/50 outline-none" />
+                <div className="mb-4 flex flex-col gap-3">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="relative max-w-md flex-1 group">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
+                      <input
+                        type="text"
+                        placeholder="Search sender, message, or app (e.g. Telegram)..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        className="w-full rounded-xl border border-slate-800 bg-slate-900 py-2 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-indigo-500/50"
+                      />
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <select
+                        value={messageDeviceFilter}
+                        onChange={(e) => setMessageDeviceFilter(e.target.value)}
+                        className="rounded-lg border border-slate-700 bg-slate-900/60 px-2.5 py-2 text-xs font-bold text-slate-300"
+                        title="Filter messages by device"
+                      >
+                        <option value="all">All devices</option>
+                        {deviceFilterOptions.map((d) => (
+                          <option key={d.id} value={d.id}>
+                            {d.label}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={exportMessagesCsv}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800/80 px-3 py-2 text-xs font-bold text-slate-300 hover:border-slate-600"
+                      >
+                        <Download size={14} /> Export CSV
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setMessageFetchLimit((n) => n + 100)}
+                        className="rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs font-bold text-slate-400 hover:border-slate-600"
+                      >
+                        Load more ({messageFetchLimit} from server)
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-800/80 bg-slate-900/30 px-3 py-2">
+                    <Filter size={14} className="shrink-0 text-slate-500" />
+                    <select
+                      className="max-w-[180px] rounded-lg border border-slate-700 bg-slate-900 px-2 py-1.5 text-xs text-slate-300"
+                      value={savedViewPicker}
+                      onChange={(e) => {
+                        const id = e.target.value;
+                        setSavedViewPicker('');
+                        const v = savedViews.find((s) => s.id === id);
+                        if (v) applySavedView(v);
+                      }}
+                    >
+                      <option value="">
+                        Saved views…
+                      </option>
+                      {savedViews.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="text"
+                      value={savedViewNameDraft}
+                      onChange={(e) => setSavedViewNameDraft(e.target.value)}
+                      placeholder="Name for current filters"
+                      className="min-w-[120px] flex-1 rounded-lg border border-slate-700 bg-slate-900 px-2 py-1.5 text-xs text-slate-300"
+                    />
+                    <button
+                      type="button"
+                      onClick={saveCurrentView}
+                      className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-indigo-500"
+                    >
+                      Save view
+                    </button>
                   </div>
                 </div>
 
                 {filteredMessages.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center h-64 text-center text-slate-600 italic">
-                    No messages yet. On the phone: grant notification access to Wallet Hub, keep the app running, and ensure messenger apps show content in notifications (not “silent” or minimal).
+                  <div className="mx-auto flex max-w-lg flex-col items-center justify-center gap-3 px-4 py-12 text-center text-slate-500">
+                    {messages.length > 0 ? (
+                      <>
+                        <p className="text-sm font-semibold text-slate-300 not-italic">
+                          No messages match your filters
+                        </p>
+                        <p className="text-xs leading-relaxed not-italic">
+                          Try <span className="text-slate-400">All</span> app chip,{' '}
+                          <span className="text-slate-400">All devices</span>, clear search, and set status to{' '}
+                          <span className="text-slate-400">Active</span> (non-archived).
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-sm font-semibold text-slate-300 not-italic">
+                          No social messages loaded yet
+                        </p>
+                        {healthSnapshot?.supabaseAdminConfigured &&
+                        healthSnapshot.tableCounts &&
+                        healthSnapshot.tableCounts.messages != null &&
+                        healthSnapshot.tableCounts.messages > 0 ? (
+                          <p className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-100 not-italic">
+                            Server-side count: <span className="font-mono">{healthSnapshot.tableCounts.messages}</span>{' '}
+                            row(s) in <span className="font-mono">public.messages</span>, but this browser loaded none.
+                            SMS and calls use other tables, so they can still show. Fix: enable a SELECT policy for the{' '}
+                            <span className="font-mono">anon</span> role on <span className="font-mono">messages</span>{' '}
+                            — run <span className="font-mono">supabase/rls_anon_policies.sql</span> (or the RLS section
+                            of <span className="font-mono">schema.sql</span>) in Supabase SQL.
+                          </p>
+                        ) : null}
+                        {healthSnapshot?.supabaseAdminConfigured &&
+                        healthSnapshot.tableCounts &&
+                        healthSnapshot.tableCounts.messages === 0 ? (
+                          <p className="rounded-xl border border-slate-600/80 bg-slate-800/40 px-3 py-2 text-xs leading-relaxed text-slate-300 not-italic">
+                            Server-side count: <span className="font-mono">0</span> rows in{' '}
+                            <span className="font-mono">public.messages</span> (SMS/calls are synced separately). On the
+                            phone: grant notification access, disable per-app blocklist in this app if you use it, and
+                            trigger a new chat notification — or open the in-app capture log to see upload errors.
+                          </p>
+                        ) : null}
+                        {!healthSnapshot?.supabaseAdminConfigured ? (
+                          <p className="text-[11px] leading-relaxed text-slate-500 not-italic">
+                            Tip: set <span className="font-mono text-slate-400">SUPABASE_SERVICE_ROLE_KEY</span> in{' '}
+                            <span className="font-mono text-slate-400">.env.local</span> so this dashboard can compare
+                            server row counts with what the browser loads (spots RLS vs empty table).
+                          </p>
+                        ) : null}
+                        <p className="text-xs leading-relaxed not-italic">
+                          On the phone: grant notification access to this app, open the main screen once, and ensure
+                          WhatsApp/Telegram/etc. show message text in notifications (not “silent” or hide content).
+                        </p>
+                        <p className="text-xs leading-relaxed not-italic">
+                          In Supabase: open <span className="font-mono text-slate-400">public.messages</span> in Table
+                          Editor. If rows exist there but nothing appears here, Row Level Security is usually blocking the
+                          anon key — run <span className="font-mono text-slate-400">supabase/rls_anon_policies.sql</span>{' '}
+                          in the SQL editor (same project as{' '}
+                          <span className="font-mono text-slate-400">NEXT_PUBLIC_SUPABASE_*</span>).
+                        </p>
+                      </>
+                    )}
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 gap-3">
@@ -788,16 +1287,36 @@ export default function Dashboard() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
               >
-                <div className="flex items-center space-x-4 mb-6">
-                  <div className="relative flex-1 max-w-md group">
+                <div className="mb-6 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                  <div className="relative max-w-md flex-1 group">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
                     <input
                       type="text"
                       placeholder="Search order ref or last message..."
                       value={orderSearchQuery}
                       onChange={(e) => setOrderSearchQuery(e.target.value)}
-                      className="w-full bg-slate-900 border border-slate-800 rounded-xl py-2 pl-10 pr-4 text-sm focus:ring-2 focus:ring-amber-500/50 outline-none"
+                      className="w-full rounded-xl border border-slate-800 bg-slate-900 py-2 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-amber-500/50"
                     />
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setGroupOrdersByApp((v) => !v)}
+                      className={`rounded-lg border px-3 py-2 text-xs font-bold ${
+                        groupOrdersByApp
+                          ? 'border-amber-500/50 bg-amber-500/15 text-amber-200'
+                          : 'border-slate-700 bg-slate-900/60 text-slate-400 hover:border-slate-600'
+                      }`}
+                    >
+                      Group by app
+                    </button>
+                    <button
+                      type="button"
+                      onClick={exportOrdersCsv}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800/80 px-3 py-2 text-xs font-bold text-slate-300 hover:border-slate-600"
+                    >
+                      <Download size={14} /> Export CSV
+                    </button>
                   </div>
                 </div>
 
@@ -805,10 +1324,77 @@ export default function Dashboard() {
                   <div className="flex flex-col items-center justify-center h-64 text-slate-600 italic">
                     No orders found here
                   </div>
+                ) : groupOrdersByApp ? (
+                  <div className="space-y-8">
+                    {ordersGroupedByApp.map(([appKey, rows]) => (
+                      <div key={appKey} className="space-y-3">
+                        <div className="flex items-baseline gap-2 border-b border-slate-800/80 pb-2">
+                          <span className="text-xs font-bold uppercase tracking-wider text-amber-500/90">
+                            {rows[0].appLabel}
+                          </span>
+                          {appKey !== '__unknown__' && (
+                            <span className="font-mono text-[10px] text-slate-600" title="App package">
+                              {appKey}
+                            </span>
+                          )}
+                        </div>
+                        <div className="grid grid-cols-1 gap-3">
+                          {rows.map(({ order }) => {
+                            const linkedCount = messages.filter(
+                              (m) => (m.order_ref || null) === order.order_ref
+                            ).length;
+                            const lastAt = order.last_message_at || order.updated_at || '';
+                            return (
+                              <div
+                                key={order.order_ref}
+                                onClick={() => {
+                                  setSelectedOrderRef(order.order_ref);
+                                  setSelectedMessage(null);
+                                  setIsNoteEditing(false);
+                                  setReplyText('');
+                                  setCopyFeedback(false);
+                                }}
+                                className={`flex cursor-pointer flex-col space-y-3 rounded-2xl border p-4 transition-all ${
+                                  selectedOrderRef === order.order_ref
+                                    ? 'border-amber-500/40 bg-amber-500/10'
+                                    : 'border-slate-800/50 bg-[#0E0E25] hover:border-slate-700'
+                                }`}
+                              >
+                                <div className="flex items-start justify-between">
+                                  <div>
+                                    <h3 className="font-bold text-slate-100">{order.order_ref}</h3>
+                                    <div className="mt-2 flex items-center space-x-2">
+                                      {renderOrderStatusPill(order.status)}
+                                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                                        {linkedCount} msg
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <div className="text-right">
+                                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                                      {lastAt ? new Date(lastAt).toLocaleString() : '—'}
+                                    </p>
+                                    <p className="mt-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                                      {order.amount && order.currency ? `${order.amount} ${order.currency}` : ''}
+                                    </p>
+                                  </div>
+                                </div>
+                                {order.last_message_text && (
+                                  <p className="line-clamp-2 text-sm text-slate-300">{order.last_message_text}</p>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 ) : (
                   <div className="grid grid-cols-1 gap-3">
                     {filteredOrders.map((order) => {
-                      const linkedCount = messages.filter(m => (m.order_ref || null) === order.order_ref).length;
+                      const linkedCount = messages.filter(
+                        (m) => (m.order_ref || null) === order.order_ref
+                      ).length;
                       const lastAt = order.last_message_at || order.updated_at || '';
                       return (
                         <div
@@ -820,36 +1406,33 @@ export default function Dashboard() {
                             setReplyText('');
                             setCopyFeedback(false);
                           }}
-                          className={`p-4 rounded-2xl border transition-all cursor-pointer flex flex-col space-y-3 ${
+                          className={`flex cursor-pointer flex-col space-y-3 rounded-2xl border p-4 transition-all ${
                             selectedOrderRef === order.order_ref
-                              ? 'bg-amber-500/10 border-amber-500/40'
-                              : 'bg-[#0E0E25] border-slate-800/50 hover:border-slate-700'
+                              ? 'border-amber-500/40 bg-amber-500/10'
+                              : 'border-slate-800/50 bg-[#0E0E25] hover:border-slate-700'
                           }`}
                         >
-                          <div className="flex justify-between items-start">
+                          <div className="flex items-start justify-between">
                             <div>
-                              <h3 className="font-bold text-slate-100">
-                                {order.order_ref}
-                              </h3>
+                              <h3 className="font-bold text-slate-100">{order.order_ref}</h3>
                               <div className="mt-2 flex items-center space-x-2">
                                 {renderOrderStatusPill(order.status)}
-                                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">
+                                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
                                   {linkedCount} msg
                                 </span>
                               </div>
                             </div>
                             <div className="text-right">
-                              <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">
+                              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
                                 {lastAt ? new Date(lastAt).toLocaleString() : '—'}
                               </p>
-                              <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mt-1">
+                              <p className="mt-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">
                                 {order.amount && order.currency ? `${order.amount} ${order.currency}` : ''}
                               </p>
                             </div>
                           </div>
-
                           {order.last_message_text && (
-                            <p className="text-sm text-slate-300 line-clamp-2">{order.last_message_text}</p>
+                            <p className="line-clamp-2 text-sm text-slate-300">{order.last_message_text}</p>
                           )}
                         </div>
                       );
@@ -923,6 +1506,23 @@ export default function Dashboard() {
                   <div className="flex flex-wrap items-end gap-3">
                     <div>
                       <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                        Device
+                      </label>
+                      <select
+                        value={smsDeviceFilter}
+                        onChange={(e) => setSmsDeviceFilter(e.target.value)}
+                        className="rounded-xl border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/50"
+                      >
+                        <option value="all">All devices</option>
+                        {deviceFilterOptions.map((d) => (
+                          <option key={d.id} value={d.id}>
+                            {d.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-500">
                         From
                       </label>
                       <input
@@ -943,22 +1543,23 @@ export default function Dashboard() {
                         className="rounded-xl border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/50"
                       />
                     </div>
-                    {(smsFilterFrom || smsFilterTo) && (
+                    {(smsFilterFrom || smsFilterTo || smsDeviceFilter !== 'all') && (
                       <button
                         type="button"
                         onClick={() => {
                           setSmsFilterFrom('');
                           setSmsFilterTo('');
+                          setSmsDeviceFilter('all');
                         }}
                         className="rounded-xl border border-slate-700 bg-slate-800/80 px-3 py-2 text-xs font-medium text-slate-300 hover:bg-slate-800"
                       >
-                        Clear range
+                        Clear filters
                       </button>
                     )}
                   </div>
                 </div>
                 <p className="mb-4 text-[11px] text-slate-500">
-                  Newest messages appear first. Use From / To to limit by date and time (your local timezone).
+                  Newest messages appear first. Use Device and From / To to narrow the results.
                 </p>
                 {filteredSms.length === 0 ? (
                   <div className="flex h-64 flex-col items-center justify-center italic text-slate-600">
@@ -1024,6 +1625,23 @@ export default function Dashboard() {
                   <div className="flex flex-wrap items-end gap-3">
                     <div>
                       <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                        Device
+                      </label>
+                      <select
+                        value={callDeviceFilter}
+                        onChange={(e) => setCallDeviceFilter(e.target.value)}
+                        className="rounded-xl border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/50"
+                      >
+                        <option value="all">All devices</option>
+                        {deviceFilterOptions.map((d) => (
+                          <option key={d.id} value={d.id}>
+                            {d.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-500">
                         From
                       </label>
                       <input
@@ -1044,22 +1662,23 @@ export default function Dashboard() {
                         className="rounded-xl border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/50"
                       />
                     </div>
-                    {(callFilterFrom || callFilterTo) && (
+                    {(callFilterFrom || callFilterTo || callDeviceFilter !== 'all') && (
                       <button
                         type="button"
                         onClick={() => {
                           setCallFilterFrom('');
                           setCallFilterTo('');
+                          setCallDeviceFilter('all');
                         }}
                         className="rounded-xl border border-slate-700 bg-slate-800/80 px-3 py-2 text-xs font-medium text-slate-300 hover:bg-slate-800"
                       >
-                        Clear range
+                        Clear filters
                       </button>
                     )}
                   </div>
                 </div>
                 <p className="mb-4 text-[11px] text-slate-500">
-                  Newest calls appear first. Use From / To to limit by date and time (your local timezone).
+                  Newest calls appear first. Use Device and From / To to narrow the results.
                 </p>
                 {filteredCalls.length === 0 ? (
                   <div className="flex h-64 flex-col items-center justify-center italic text-slate-600">
@@ -1068,8 +1687,32 @@ export default function Dashboard() {
                       : 'No calls synced yet. On the phone: open the app → allow SMS and call log → sync.'}
                   </div>
                 ) : (
-                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                    {filteredCalls.map((c) => {
+                  <div className="space-y-6">
+                    {groupedCallsByDate.map((group) => {
+                      const collapsed = !!collapsedCallDateSections[group.key];
+                      return (
+                      <section key={group.key} className="space-y-3">
+                        <div className="sticky top-[-1rem] z-10 -mx-4 border-b border-slate-700 bg-[#050510] px-5 py-3 backdrop-blur-md shadow-[0_6px_16px_rgba(0,0,0,0.45)] lg:top-[-1.5rem] lg:-mx-6 lg:px-7">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setCollapsedCallDateSections((prev) => ({
+                                ...prev,
+                                [group.key]: !prev[group.key],
+                              }))
+                            }
+                            className="flex min-h-[28px] w-full items-center justify-between text-left"
+                          >
+                            <h4 className="text-sm font-bold uppercase tracking-wider text-slate-200">
+                              {group.label}
+                            </h4>
+                            <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                              {collapsed ? 'Show' : 'Hide'} ({group.calls.length})
+                            </span>
+                          </button>
+                        </div>
+                        {!collapsed && <div className="space-y-3">
+                          {group.calls.map((c) => {
                       const dur = c.duration_seconds;
                       const durLabel =
                         dur < 60 ? `${dur}s` : `${Math.floor(dur / 60)}m ${dur % 60}s`;
@@ -1081,34 +1724,37 @@ export default function Dashboard() {
                             : c.call_type === 'outgoing'
                               ? 'text-sky-400'
                               : 'text-slate-400';
-                      return (
-                        <div
-                          key={c.id}
-                          className="rounded-2xl border border-slate-800/50 bg-[#0E0E25] p-4"
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <div>
-                              <h3 className="font-bold text-slate-100">
-                                {c.contact_name || c.phone_number}
-                              </h3>
-                              {c.contact_name && (
-                                <p className="font-mono text-xs text-slate-500">{c.phone_number}</p>
-                              )}
-                              <p className="mt-1 text-[10px] text-slate-500">
-                                {deviceNameById(c.device_id)}
-                              </p>
-                            </div>
-                            <span className={`text-[10px] font-bold uppercase ${typeColor}`}>
-                              {c.call_type}
-                            </span>
-                          </div>
-                          <div className="mt-3 flex items-center justify-between border-t border-slate-800/50 pt-3 text-xs text-slate-400">
-                            <span>{new Date(c.occurred_at).toLocaleString()}</span>
-                            <span className="font-mono text-slate-300">{durLabel}</span>
-                          </div>
-                        </div>
-                      );
-                    })}
+                            return (
+                              <div
+                                key={c.id}
+                                className="rounded-2xl border border-slate-800/50 bg-[#0E0E25] p-4"
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <div>
+                                    <h3 className="font-bold text-slate-100">
+                                      {c.contact_name || c.phone_number}
+                                    </h3>
+                                    {c.contact_name && (
+                                      <p className="font-mono text-xs text-slate-500">{c.phone_number}</p>
+                                    )}
+                                    <p className="mt-1 text-[10px] text-slate-500">
+                                      {deviceNameById(c.device_id)}
+                                    </p>
+                                  </div>
+                                  <span className={`text-[10px] font-bold uppercase ${typeColor}`}>
+                                    {c.call_type}
+                                  </span>
+                                </div>
+                                <div className="mt-3 flex items-center justify-between border-t border-slate-800/50 pt-3 text-xs text-slate-400">
+                                  <span>{new Date(c.occurred_at).toLocaleString()}</span>
+                                  <span className="font-mono text-slate-300">{durLabel}</span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>}
+                      </section>
+                    )})}
                   </div>
                 )}
               </motion.div>
@@ -1185,20 +1831,113 @@ export default function Dashboard() {
                   </div>
                 </section>
 
-                <section className="bg-[#0E0E25] border border-slate-800 p-8 rounded-3xl space-y-4">
+                <section className="bg-[#0E0E25] border border-slate-800 p-8 rounded-3xl space-y-6">
                   <div className="flex items-center space-x-3 text-indigo-400">
                     <User size={24} />
-                    <h3 className="text-xl font-bold text-white">Your profile</h3>
+                    <h3 className="text-xl font-bold text-white">User management</h3>
+                  </div>
+
+                  <div className="space-y-3 rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
+                    <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Profile</p>
+                    <p className="text-sm text-slate-400">
+                      Update your display name shown in the dashboard header.
+                    </p>
+                    <input
+                      value={profileNameDraft}
+                      onChange={(e) => setProfileNameDraft(e.target.value)}
+                      placeholder="Display name"
+                      className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/40"
+                    />
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={saveProfileFromSettings}
+                        className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500"
+                      >
+                        Save profile
+                      </button>
+                      <Link
+                        href="/profile"
+                        className="rounded-xl border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-300 hover:bg-slate-800"
+                      >
+                        Edit photo
+                      </Link>
+                    </div>
+                    {profileBanner && <p className="text-xs text-emerald-300">{profileBanner}</p>}
+                  </div>
+
+                  <div className="space-y-3 rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
+                    <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Password reset</p>
+                    <p className="text-sm text-slate-400">
+                      Change login username/password. You must confirm current credentials.
+                    </p>
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                      <input
+                        value={currentUsername}
+                        onChange={(e) => setCurrentUsername(e.target.value)}
+                        placeholder="Current username"
+                        className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/40"
+                      />
+                      <input
+                        type="password"
+                        value={currentPassword}
+                        onChange={(e) => setCurrentPassword(e.target.value)}
+                        placeholder="Current password"
+                        className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/40"
+                      />
+                      <input
+                        value={newUsername}
+                        onChange={(e) => setNewUsername(e.target.value)}
+                        placeholder="New username"
+                        className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/40"
+                      />
+                      <input
+                        type="password"
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        placeholder="New password (min 12 chars)"
+                        className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/40"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      disabled={userMgmtBusy}
+                      onClick={resetPassword}
+                      className="rounded-xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-500 disabled:opacity-60"
+                    >
+                      {userMgmtBusy ? 'Updating...' : 'Update login credentials'}
+                    </button>
+                    {userMgmtBanner && <p className="text-xs text-amber-200">{userMgmtBanner}</p>}
+                  </div>
+                </section>
+
+                <section className="bg-[#0E0E25] border border-slate-800 p-8 rounded-3xl space-y-4">
+                  <div className="flex items-center space-x-3 text-indigo-400">
+                    <ShieldCheck size={24} />
+                    <h3 className="text-xl font-bold text-white">Security controls</h3>
                   </div>
                   <p className="text-sm text-slate-400">
-                    Update the display name and picture used in the header (stored in this browser only).
+                    Manage allowed source IPs without code changes. Leave empty to allow all IPs.
+                    One IP per line or comma-separated.
                   </p>
-                  <Link
-                    href="/profile"
-                    className="inline-flex items-center rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-500"
-                  >
-                    Open profile
-                  </Link>
+                  <textarea
+                    value={allowedIpsDraft}
+                    onChange={(e) => setAllowedIpsDraft(e.target.value)}
+                    rows={5}
+                    placeholder={`203.0.113.10\n198.51.100.22`}
+                    className="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 outline-none focus:ring-2 focus:ring-indigo-500/40"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={saveSecuritySettings}
+                      disabled={securityBusy}
+                      className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-60"
+                    >
+                      {securityBusy ? 'Saving...' : 'Save allowlist'}
+                    </button>
+                  </div>
+                  {securityBanner && <p className="text-xs text-indigo-200">{securityBanner}</p>}
                 </section>
 
                 <section className="bg-indigo-500/5 border border-indigo-500/20 p-8 rounded-3xl space-y-4">

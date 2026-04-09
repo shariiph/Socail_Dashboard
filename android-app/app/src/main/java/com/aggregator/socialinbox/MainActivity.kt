@@ -1,13 +1,17 @@
 package com.aggregator.socialinbox
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Bundle
 import android.view.View
 import android.widget.Button
+import android.widget.EditText
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.SwitchCompat
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.app.NotificationManagerCompat
@@ -22,6 +26,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var phoneSyncStatusText: TextView
     private lateinit var batteryStatusText: TextView
     private lateinit var batteryOptimizeButton: Button
+    private lateinit var blockedPackagesInput: EditText
+    private lateinit var redactionSwitch: SwitchCompat
+    private lateinit var saveFiltersButton: Button
+    private lateinit var openDebugButton: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -35,6 +43,10 @@ class MainActivity : AppCompatActivity() {
         phoneSyncStatusText = findViewById(R.id.phoneSyncStatusText)
         batteryStatusText = findViewById(R.id.batteryStatusText)
         batteryOptimizeButton = findViewById(R.id.batteryOptimizeButton)
+        blockedPackagesInput = findViewById(R.id.blockedPackagesInput)
+        redactionSwitch = findViewById(R.id.redactionSwitch)
+        saveFiltersButton = findViewById(R.id.saveFiltersButton)
+        openDebugButton = findViewById(R.id.openDebugButton)
 
         grantButton.setOnClickListener {
             startActivity(android.content.Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"))
@@ -47,6 +59,19 @@ class MainActivity : AppCompatActivity() {
         batteryOptimizeButton.setOnClickListener {
             BatteryOptimizationHelper.openRequestIgnoreBatteryOptimizations(this)
         }
+
+        saveFiltersButton.setOnClickListener {
+            NotificationFilterPrefs.setBlockedPackagesCsv(this, blockedPackagesInput.text?.toString() ?: "")
+            NotificationFilterPrefs.setRedactionEnabled(this, redactionSwitch.isChecked)
+            Toast.makeText(this, R.string.filters_saved, Toast.LENGTH_SHORT).show()
+        }
+
+        openDebugButton.setOnClickListener {
+            startActivity(Intent(this, NotificationDebugActivity::class.java))
+        }
+
+        blockedPackagesInput.setText(NotificationFilterPrefs.blockedPackagesCsvRaw(this))
+        redactionSwitch.isChecked = NotificationFilterPrefs.isRedactionEnabled(this)
 
         refreshStatus()
     }

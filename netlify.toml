@@ -6,6 +6,7 @@
 [build]
   base = "web-dashboard"
   command = "npm install && npm run build"
+  publish = ".next"
 
 [build.environment]
   NODE_VERSION = "20"

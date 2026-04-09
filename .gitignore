@@ -22,6 +22,9 @@ android-app/jdk-bin/
 android-app/android-sdk/
 android-app/gradle-bin/
 
+# --- Accidental local artifacts ---
+Password.png
+
 # --- OS / editor ---
 .DS_Store
 *.log

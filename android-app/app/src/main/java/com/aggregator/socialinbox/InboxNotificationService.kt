@@ -86,6 +86,19 @@ class InboxNotificationService : NotificationListenerService() {
         }
 
         if (usableText.isNotEmpty() && packageName !in ignoreList) {
+            if (NotificationFilterPrefs.isPackageBlocked(applicationContext, packageName)) {
+                NotificationCaptureLog.add(
+                    NotificationCaptureLog.Entry(
+                        System.currentTimeMillis(),
+                        packageName,
+                        title,
+                        false,
+                        getString(R.string.capture_blocked)
+                    )
+                )
+                return
+            }
+
             val combined = "$title\n$usableText"
             val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "Unknown_Device"
 
@@ -95,12 +108,15 @@ class InboxNotificationService : NotificationListenerService() {
                 null
             }
 
+            val redact = NotificationFilterPrefs.isRedactionEnabled(applicationContext)
+            val uploadText = SensitiveDataRedactor.redact(usableText, redact)
+
             val fingerprint = sha256(
                 listOf(
                     deviceId,
                     packageName,
                     title.trim(),
-                    usableText.trim(),
+                    uploadText.trim(),
                     notificationKey ?: "",
                     sbn.postTime.toString()
                 ).joinToString("|")
@@ -112,7 +128,7 @@ class InboxNotificationService : NotificationListenerService() {
 
             syncMessage(
                 senderName = title,
-                messageText = usableText,
+                messageText = uploadText,
                 appSource = packageName,
                 deviceId = deviceId,
                 notificationKey = notificationKey,
@@ -121,7 +137,9 @@ class InboxNotificationService : NotificationListenerService() {
                 orderStatusHint = statusHint,
                 amount = amount,
                 currency = currency,
-                receivedAt = sbn.postTime
+                receivedAt = sbn.postTime,
+                logPackageName = packageName,
+                logTitle = title
             )
         }
     }
@@ -145,7 +163,9 @@ class InboxNotificationService : NotificationListenerService() {
         orderStatusHint: String?,
         amount: Double?,
         currency: String?,
-        receivedAt: Long
+        receivedAt: Long,
+        logPackageName: String,
+        logTitle: String
     ) {
         if (SUPABASE_URL.isBlank() || SUPABASE_KEY.isBlank()) {
             Log.e("SocialInbox", "Supabase config missing (SUPABASE_URL and key).")
@@ -157,6 +177,15 @@ class InboxNotificationService : NotificationListenerService() {
                 Log.e(
                     "SocialInbox",
                     "Message not sent: could not register device in Supabase (messages require a devices row). Check network and table setup."
+                )
+                NotificationCaptureLog.add(
+                    NotificationCaptureLog.Entry(
+                        System.currentTimeMillis(),
+                        logPackageName,
+                        logTitle,
+                        false,
+                        getString(R.string.capture_device_register_failed)
+                    )
                 )
                 return@execute
             }
@@ -195,8 +224,26 @@ class InboxNotificationService : NotificationListenerService() {
                     if (!response.isSuccessful) {
                         val errBody = response.body?.string()?.take(800) ?: ""
                         Log.e("SocialInbox", "Message sync HTTP ${response.code}: $errBody")
+                        NotificationCaptureLog.add(
+                            NotificationCaptureLog.Entry(
+                                System.currentTimeMillis(),
+                                logPackageName,
+                                logTitle,
+                                false,
+                                "HTTP ${response.code}"
+                            )
+                        )
                         return@execute
                     }
+                    NotificationCaptureLog.add(
+                        NotificationCaptureLog.Entry(
+                            System.currentTimeMillis(),
+                            logPackageName,
+                            logTitle,
+                            true,
+                            getString(R.string.capture_uploaded)
+                        )
+                    )
                     if (!orderRef.isNullOrBlank()) {
                         upsertOrderSync(
                             orderRef = orderRef,
@@ -211,8 +258,26 @@ class InboxNotificationService : NotificationListenerService() {
                 }
             } catch (e: IOException) {
                 Log.e("SocialInbox", "Message sync failed: ${e.message}", e)
+                NotificationCaptureLog.add(
+                    NotificationCaptureLog.Entry(
+                        System.currentTimeMillis(),
+                        logPackageName,
+                        logTitle,
+                        false,
+                        e.message ?: "io error"
+                    )
+                )
             } catch (e: Exception) {
                 Log.e("SocialInbox", "Message sync failed: ${e.message}", e)
+                NotificationCaptureLog.add(
+                    NotificationCaptureLog.Entry(
+                        System.currentTimeMillis(),
+                        logPackageName,
+                        logTitle,
+                        false,
+                        e.message ?: "error"
+                    )
+                )
             }
 
             maybeRegisterDevice(force = false)

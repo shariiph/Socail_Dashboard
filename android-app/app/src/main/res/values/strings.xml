@@ -29,4 +29,17 @@
     <string name="battery_unrestricted_button">Allow unrestricted battery</string>
     <string name="battery_hint_ok">Battery: unrestricted (recommended for 24/7 sync).</string>
     <string name="battery_hint_restricted">For reliable background sync, allow unrestricted battery for Wallet Hub (some phones also need Autostart in system settings).</string>
+    <string name="filters_card_title">Privacy &amp; filters</string>
+    <string name="filters_card_body">Block apps from syncing (package names, comma-separated, e.g. com.bank.app). When enabled, long digit sequences in message text are redacted before upload.</string>
+    <string name="blocked_packages_hint">Blocked package names</string>
+    <string name="save_filters">Save</string>
+    <string name="filters_saved">Filters saved</string>
+    <string name="redaction_label">Redact OTP-like digits in message text</string>
+    <string name="open_debug">Recent notification capture log</string>
+    <string name="debug_screen_hint">Last captures from the notification listener (blocked, upload ok, or errors). Does not store full message bodies.</string>
+    <string name="debug_empty">No captures yet — trigger a notification from an allowed app.</string>
+    <string name="capture_blocked">Blocked by package filter</string>
+    <string name="capture_device_register_failed">Device not registered</string>
+    <string name="capture_uploaded">Uploaded</string>
+    <string name="worker_scheduled_hint">SMS/call backup sync runs about every 15 minutes when online.</string>
 </resources>

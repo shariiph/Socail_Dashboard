@@ -20,5 +20,6 @@ class WalletHubApplication : Application() {
         } else {
             WatchdogScheduler.cancel(this)
         }
+        TelephonySyncScheduler.schedule(this)
     }
 }
