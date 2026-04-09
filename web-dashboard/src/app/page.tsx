@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { createClient } from '@supabase/supabase-js';
 import { getProfile, profileInitials, saveProfile } from '@/lib/profileStorage';
 import { appSourcePillClass, getAppSourceMeta } from '@/lib/appSourceMeta';
@@ -121,6 +122,7 @@ interface PhoneCallRow {
 }
 
 export default function Dashboard() {
+  const router = useRouter();
   const [messages, setMessages] = useState<Message[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -182,6 +184,7 @@ export default function Dashboard() {
   const [pinUnlocked, setPinUnlocked] = useState(!dashboardPin);
   const [pinInput, setPinInput] = useState('');
   const [authReady, setAuthReady] = useState(!dashboardPin);
+  const [sessionChecked, setSessionChecked] = useState(false);
   const [groupOrdersByApp, setGroupOrdersByApp] = useState(false);
   const [savedViews, setSavedViews] = useState<SavedView[]>([]);
   const [savedViewNameDraft, setSavedViewNameDraft] = useState('');
@@ -190,6 +193,30 @@ export default function Dashboard() {
   useEffect(() => {
     messageLimitRef.current = messageFetchLimit;
   }, [messageFetchLimit]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const verifySession = async () => {
+      try {
+        const res = await fetch('/api/security/settings', {
+          cache: 'no-store',
+          credentials: 'same-origin',
+        });
+        if (cancelled) return;
+        if (!res.ok) {
+          router.replace('/login');
+          return;
+        }
+        setSessionChecked(true);
+      } catch {
+        if (!cancelled) router.replace('/login');
+      }
+    };
+    verifySession();
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
 
   useEffect(() => {
     if (!dashboardPin) return;
@@ -872,6 +899,14 @@ export default function Dashboard() {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#050510] text-slate-500 text-sm">
         Loading dashboard…
+      </div>
+    );
+  }
+
+  if (!sessionChecked) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#050510] text-slate-500 text-sm">
+        Verifying session…
       </div>
     );
   }
