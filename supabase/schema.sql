@@ -19,6 +19,7 @@ create table if not exists public.messages (
 
   message_fingerprint text unique not null,
   notification_key text,
+  conversation_id text,
   received_at timestamptz,
 
   sender_name text,
@@ -36,6 +37,7 @@ create table if not exists public.messages (
 
   -- Dashboard state
   is_read boolean not null default false,
+  is_actioned boolean not null default false,
   archived boolean not null default false,
   notes text not null default '',
 
@@ -46,6 +48,7 @@ create table if not exists public.messages (
 -- are missing and later CREATE INDEX fails (e.g. column "order_ref" does not exist).
 alter table public.messages add column if not exists message_fingerprint text;
 alter table public.messages add column if not exists notification_key text;
+alter table public.messages add column if not exists conversation_id text;
 alter table public.messages add column if not exists received_at timestamptz;
 alter table public.messages add column if not exists sender_name text;
 alter table public.messages add column if not exists message_title text;
@@ -56,6 +59,7 @@ alter table public.messages add column if not exists order_status_hint text;
 alter table public.messages add column if not exists amount numeric;
 alter table public.messages add column if not exists currency text;
 alter table public.messages add column if not exists is_read boolean not null default false;
+alter table public.messages add column if not exists is_actioned boolean not null default false;
 alter table public.messages add column if not exists archived boolean not null default false;
 alter table public.messages add column if not exists notes text not null default '';
 
@@ -104,7 +108,12 @@ for each row execute function public.set_updated_at();
 
 -- Helpful indexes
 create index if not exists idx_messages_created_at on public.messages (created_at desc);
+create index if not exists idx_messages_received_at on public.messages (received_at desc);
+create index if not exists idx_messages_conversation on public.messages (conversation_id, received_at desc);
 create index if not exists idx_messages_order_ref on public.messages (order_ref);
+create index if not exists idx_messages_app_source_sender_time on public.messages (app_source, sender_name, received_at desc);
+create index if not exists idx_messages_is_actioned on public.messages (is_actioned) where is_actioned = false;
+create unique index if not exists idx_messages_fingerprint_unique on public.messages (message_fingerprint) where message_fingerprint is not null;
 create index if not exists idx_devices_last_seen on public.devices (last_seen desc);
 create index if not exists idx_orders_updated_at on public.orders (updated_at desc);
 create index if not exists idx_orders_status on public.orders (status);

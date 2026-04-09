@@ -5,10 +5,6 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.util.Log
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.net.UnknownHostException
 import java.text.SimpleDateFormat
@@ -21,8 +17,6 @@ import java.util.TimeZone
  * Uses the same URL/key as [InboxNotificationService] (from BuildConfig).
  */
 object SupabaseSync {
-
-    private val http = OkHttpClient()
 
     fun supabaseBaseUrl(): String = BuildConfig.SUPABASE_URL.trim().trimEnd('/')
 
@@ -57,19 +51,10 @@ object SupabaseSync {
                 put("is_online", true)
             }
 
-            val body = json.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
             val key = apiKey()
             val url = "${supabaseBaseUrl()}/rest/v1/devices?on_conflict=id"
-            val request = Request.Builder()
-                .url(url)
-                .post(body)
-                .addHeader("apikey", key)
-                .addHeader("Authorization", "Bearer $key")
-                .addHeader("Content-Type", "application/json")
-                .addHeader("Prefer", "resolution=merge-duplicates")
-                .build()
 
-            http.newCall(request).execute().use { response ->
+            SupabaseHttp.postJsonWithRetry(url, key, json.toString()).use { response ->
                 if (!response.isSuccessful) {
                     val respBody = response.body?.string().orEmpty()
                     Log.e("SocialInbox", "ensureDeviceRegistered HTTP ${response.code}: ${respBody.take(400)}")
@@ -114,19 +99,10 @@ object SupabaseSync {
                     put("is_online", true)
                 }
 
-                val body = json.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
                 val key = apiKey()
                 val url = "${supabaseBaseUrl()}/rest/v1/devices?on_conflict=id"
-                val request = Request.Builder()
-                    .url(url)
-                    .post(body)
-                    .addHeader("apikey", key)
-                    .addHeader("Authorization", "Bearer $key")
-                    .addHeader("Content-Type", "application/json")
-                    .addHeader("Prefer", "resolution=merge-duplicates")
-                    .build()
 
-                http.newCall(request).execute().use { response ->
+                SupabaseHttp.postJsonWithRetry(url, key, json.toString()).use { response ->
                     val respBody = response.body?.string().orEmpty()
                     if (response.isSuccessful) {
                         Log.d("SocialInbox", "Device registered with dashboard OK")

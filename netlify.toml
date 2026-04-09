@@ -6,7 +6,8 @@
 [build]
   base = "web-dashboard"
   command = "npm install && npm run build"
-  publish = ".next"
+  # Do not set publish = ".next" here. @netlify/plugin-nextjs sets the correct deploy output;
+  # forcing .next often breaks /_next/static (CSS/JS) and leaves the app unstyled.
 
 [build.environment]
   NODE_VERSION = "20"

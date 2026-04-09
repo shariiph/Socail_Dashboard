@@ -23,7 +23,8 @@ async function resolveAllowedIps(): Promise<string[]> {
     .map((s) => s.trim())
     .filter(Boolean);
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '';
-  const serviceRole = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+  const serviceRole =
+    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY || '';
   if (!url || !serviceRole) {
     cachedAllowedIps = { ips: envIps, expiresAt: now + 60_000 };
     return envIps;
@@ -62,43 +63,53 @@ async function ipAllowed(req: NextRequest): Promise<boolean> {
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
+  // Never gate Next internals or auth endpoints (static chunks/CSS/fonts must skip this file entirely
+  // when possible — see matcher below — so deploys do not intermittently load unstyled HTML).
   const isPublic =
     pathname === '/login' ||
     pathname.startsWith('/api/auth/') ||
     pathname.startsWith('/_next/') ||
-    pathname === '/favicon.ico';
+    pathname === '/favicon.ico' ||
+    /\.(?:ico|png|jpg|jpeg|gif|svg|webp|txt|xml|webmanifest)$/i.test(pathname);
 
-  if (isPublic) {
-    return withSecurityHeaders(NextResponse.next());
-  }
+  try {
+    if (isPublic) {
+      return withSecurityHeaders(NextResponse.next());
+    }
 
-  const secret = process.env.DASHBOARD_AUTH_SECRET || '';
-  const cookie = req.cookies.get(AUTH_COOKIE)?.value || '';
+    const secret = process.env.DASHBOARD_AUTH_SECRET || '';
+    const cookie = req.cookies.get(AUTH_COOKIE)?.value || '';
 
-  // Fail closed: if auth secret is missing, do not allow dashboard access.
-  if (!secret) {
+    // Fail closed: if auth secret is missing, do not allow dashboard access.
+    if (!secret) {
+      const loginUrl = new URL('/login', req.url);
+      return NextResponse.redirect(loginUrl);
+    }
+
+    if (!(await ipAllowed(req))) {
+      return withSecurityHeaders(new NextResponse('Forbidden', { status: 403 }));
+    }
+
+    const session = await verifySessionToken(cookie);
+    if (session.ok) {
+      if (pathname === '/login') {
+        return NextResponse.redirect(new URL('/', req.url));
+      }
+      return withSecurityHeaders(NextResponse.next());
+    }
+
     const loginUrl = new URL('/login', req.url);
     return NextResponse.redirect(loginUrl);
-  }
-
-  if (!(await ipAllowed(req))) {
-    return withSecurityHeaders(
-      new NextResponse('Forbidden', { status: 403 })
-    );
-  }
-
-  const session = await verifySessionToken(cookie);
-  if (session.ok) {
-    if (pathname === '/login') {
-      return NextResponse.redirect(new URL('/', req.url));
+  } catch (e) {
+    console.error('[middleware]', e);
+    if (isPublic) {
+      return withSecurityHeaders(NextResponse.next());
     }
-    return withSecurityHeaders(NextResponse.next());
+    return NextResponse.redirect(new URL('/login', req.url));
   }
-
-  const loginUrl = new URL('/login', req.url);
-  return NextResponse.redirect(loginUrl);
 }
 
+// Keep matcher simple — complex regex has caused Edge/parser issues and plain "Internal Server Error" on /.
 export const config = {
-  matcher: ['/((?!_next/static|_next/image).*)'],
+  matcher: ['/((?!_next/|favicon\\.ico).*)'],
 };

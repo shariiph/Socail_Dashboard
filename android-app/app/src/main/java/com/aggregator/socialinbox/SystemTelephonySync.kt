@@ -10,10 +10,6 @@ import android.provider.ContactsContract
 import android.provider.Telephony
 import androidx.core.content.ContextCompat
 import android.util.Log
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.security.MessageDigest
@@ -31,8 +27,6 @@ object SystemTelephonySync {
     private const val PREFS = "social_inbox_telephony"
     private const val KEY_MAX_SMS_ID = "max_android_sms_id"
     private const val KEY_MAX_CALL_ID = "max_android_call_id"
-
-    private val http = OkHttpClient()
 
     /** SMS + call log sync needs these; [READ_CONTACTS] is optional (names). */
     fun hasTelephonyReadPermissions(context: Context): Boolean {
@@ -326,17 +320,8 @@ object SystemTelephonySync {
     private fun postBulk(url: String, body: JSONArray): String? {
         if (body.length() == 0) return null
         val key = SupabaseSync.apiKey()
-        val reqBody = body.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
-        val request = Request.Builder()
-            .url(url)
-            .post(reqBody)
-            .addHeader("apikey", key)
-            .addHeader("Authorization", "Bearer $key")
-            .addHeader("Content-Type", "application/json")
-            .addHeader("Prefer", "resolution=merge-duplicates")
-            .build()
         return try {
-            http.newCall(request).execute().use { response ->
+            SupabaseHttp.postJsonWithRetry(url, key, body.toString()).use { response ->
                 if (response.isSuccessful) null
                 else response.body?.string()?.take(500) ?: "HTTP ${response.code}"
             }

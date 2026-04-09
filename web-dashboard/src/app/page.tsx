@@ -44,15 +44,19 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { downloadCsv } from '@/lib/csv';
 import { loadSavedViews, persistSavedViews, type SavedView } from '@/lib/dashboardStorage';
+import { fetchWithRetry } from '@/lib/fetchWithRetry';
 
 // Initialize Supabase
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-const supabase = createClient(supabaseUrl, supabaseKey, {
-  realtime: {
-    params: { eventsPerSecond: 30 },
-  },
-});
+const supabase =
+  supabaseUrl && supabaseKey
+    ? createClient(supabaseUrl, supabaseKey, {
+        realtime: {
+          params: { eventsPerSecond: 30 },
+        },
+      })
+    : null;
 
 /** Optional browser gate; PIN is visible in the client bundle — use only as a casual screen lock. */
 const dashboardPin = process.env.NEXT_PUBLIC_DASHBOARD_PIN || '';
@@ -171,6 +175,8 @@ export default function Dashboard() {
 
   const [messageFetchLimit, setMessageFetchLimit] = useState(100);
   const messageLimitRef = useRef(100);
+  /** Ignore stale results when multiple loadDashboardData runs overlap (poll + visibility + manual refresh). */
+  const loadDashboardGenerationRef = useRef(0);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [pinUnlocked, setPinUnlocked] = useState(!dashboardPin);
@@ -238,91 +244,148 @@ export default function Dashboard() {
     async (opts?: { showRefreshing?: boolean }) => {
       const spin = opts?.showRefreshing === true;
       if (spin) setIsRefreshing(true);
+      const generation = ++loadDashboardGenerationRef.current;
+      const stillHere = () => generation === loadDashboardGenerationRef.current;
+
       try {
         if (!supabaseUrl || !supabaseKey) {
-          setFetchError(
-            'Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY. Restart dev server after editing .env.local.'
-          );
+          if (stillHere()) {
+            setFetchError(
+              'Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY. Restart dev server after editing .env.local.'
+            );
+          }
           return;
         }
-        setFetchError(null);
-        setFetchWarnings([]);
+        if (stillHere()) {
+          setFetchError(null);
+          setFetchWarnings([]);
+        }
         const warnings: string[] = [];
 
-        const { data: msgData, error: msgError } = await supabase
-          .from('messages')
-          .select('*')
-          .order('created_at', { ascending: false })
-          .limit(messageFetchLimit);
-        if (msgError) {
-          warnings.push(
-            `Social messages (Inbox): ${msgError.message}. Check RLS policies on public.messages or run supabase/rls_anon_policies.sql.`
+        let messagesLoaded = false;
+        let inboxServerWarning: string | null = null;
+        try {
+          const inboxRes = await fetchWithRetry(
+            `/api/inbox/messages?limit=${messageFetchLimit}`,
+            { cache: 'no-store', credentials: 'same-origin' }
           );
-          setMessages([]);
-        } else {
-          setMessages((msgData || []) as Message[]);
+          if (inboxRes.ok) {
+            const inboxJson = (await inboxRes.json()) as { messages?: Message[] };
+            if (Array.isArray(inboxJson.messages)) {
+              if (stillHere()) setMessages(inboxJson.messages);
+              messagesLoaded = true;
+            }
+          } else {
+            const errJson = (await inboxRes.json().catch(() => ({}))) as {
+              error?: string;
+              fallbackToAnon?: boolean;
+            };
+            const detail = errJson.error || inboxRes.statusText || String(inboxRes.status);
+            inboxServerWarning = `Social messages (server): ${detail} (using browser Supabase as fallback).`;
+          }
+        } catch {
+          inboxServerWarning =
+            'Social messages: server inbox request failed (network or 5xx). Using browser Supabase as fallback.';
         }
 
-        const { data: devData, error: devError } = await supabase
-          .from('devices')
-          .select('*')
-          .order('last_seen', { ascending: false });
-        if (devError) {
-          warnings.push(
-            `Devices: ${devError.message}. Run supabase/fix_missing_devices.sql (or full schema.sql) in the Supabase SQL editor.`
-          );
+        if (supabase) {
+          if (!messagesLoaded) {
+            const { data: msgData, error: msgError } = await supabase
+              .from('messages')
+              .select('*')
+              .order('created_at', { ascending: false })
+              .limit(messageFetchLimit);
+            if (msgError) {
+              if (inboxServerWarning) warnings.push(inboxServerWarning);
+              warnings.push(
+                `Social messages (browser): ${msgError.message}. Check RLS on public.messages or run supabase/rls_anon_policies.sql; ensure Netlify has SUPABASE_SERVICE_ROLE_KEY (secret key, not publishable).`
+              );
+              if (stillHere()) setMessages([]);
+            } else {
+              const rows = (msgData || []) as Message[];
+              if (stillHere()) setMessages(rows);
+              if (inboxServerWarning && rows.length === 0) {
+                warnings.push(inboxServerWarning);
+              }
+            }
+          }
+
+          const { data: devData, error: devError } = await supabase
+            .from('devices')
+            .select('*')
+            .order('last_seen', { ascending: false });
+          if (devError) {
+            warnings.push(
+              `Devices: ${devError.message}. Run supabase/fix_missing_devices.sql (or full schema.sql) in the Supabase SQL editor.`
+            );
+            if (stillHere()) setDevices([]);
+          } else {
+            if (stillHere()) setDevices((devData || []) as Device[]);
+          }
+
+          const { data: ordData, error: ordError } = await supabase
+            .from('orders')
+            .select('*')
+            .order('updated_at', { ascending: false });
+          if (ordError) {
+            warnings.push(
+              `Orders: ${ordError.message}. Run supabase/fix_missing_orders.sql (or full supabase/schema.sql) in the Supabase SQL editor.`
+            );
+            if (stillHere()) setOrders([]);
+          } else {
+            if (stillHere()) setOrders((ordData || []) as Order[]);
+          }
+
+          const { data: smsData, error: smsError } = await supabase
+            .from('sms_messages')
+            .select('*')
+            .order('occurred_at', { ascending: false });
+          const { data: callData, error: callError } = await supabase
+            .from('phone_calls')
+            .select('*')
+            .order('occurred_at', { ascending: false });
+          if (smsError || callError) {
+            const hint = smsError?.message || callError?.message || 'unknown error';
+            warnings.push(`SMS / call log: ${hint}. Run supabase/fix_sms_calls.sql in the Supabase SQL editor.`);
+          }
+          if (stillHere()) {
+            if (smsError) setSmsMessages([]);
+            else setSmsMessages((smsData || []) as SmsMessage[]);
+            if (callError) setPhoneCalls([]);
+            else setPhoneCalls((callData || []) as PhoneCallRow[]);
+          }
+        } else if (stillHere()) {
           setDevices([]);
-        } else {
-          setDevices((devData || []) as Device[]);
-        }
-
-        const { data: ordData, error: ordError } = await supabase
-          .from('orders')
-          .select('*')
-          .order('updated_at', { ascending: false });
-        if (ordError) {
-          warnings.push(
-            `Orders: ${ordError.message}. Run supabase/fix_missing_orders.sql (or full supabase/schema.sql) in the Supabase SQL editor.`
-          );
           setOrders([]);
-        } else {
-          setOrders((ordData || []) as Order[]);
+          setSmsMessages([]);
+          setPhoneCalls([]);
         }
 
-        const { data: smsData, error: smsError } = await supabase
-          .from('sms_messages')
-          .select('*')
-          .order('occurred_at', { ascending: false });
-        const { data: callData, error: callError } = await supabase
-          .from('phone_calls')
-          .select('*')
-          .order('occurred_at', { ascending: false });
-        if (smsError || callError) {
-          const hint = smsError?.message || callError?.message || 'unknown error';
-          warnings.push(`SMS / call log: ${hint}. Run supabase/fix_sms_calls.sql in the Supabase SQL editor.`);
+        if (stillHere()) {
+          setFetchWarnings(warnings);
+          setLastSyncedAt(new Date().toISOString());
         }
-        if (smsError) setSmsMessages([]);
-        else setSmsMessages((smsData || []) as SmsMessage[]);
-        if (callError) setPhoneCalls([]);
-        else setPhoneCalls((callData || []) as PhoneCallRow[]);
-
-        setFetchWarnings(warnings);
-        setLastSyncedAt(new Date().toISOString());
 
         try {
-          const hr = await fetch('/api/health', { cache: 'no-store' });
+          const hr = await fetchWithRetry('/api/health', {
+            cache: 'no-store',
+            credentials: 'same-origin',
+          });
           const hj = (await hr.json()) as {
             tableCounts?: Record<string, number | null> | null;
             supabaseAdminConfigured?: boolean;
           };
-          setHealthSnapshot({
-            tableCounts: hj.tableCounts ?? null,
-            supabaseAdminConfigured: !!hj.supabaseAdminConfigured,
-          });
+          if (stillHere()) {
+            setHealthSnapshot({
+              tableCounts: hj.tableCounts ?? null,
+              supabaseAdminConfigured: !!hj.supabaseAdminConfigured,
+            });
+          }
         } catch {
-          setHealthSnapshot(null);
+          if (stillHere()) setHealthSnapshot(null);
         }
       } catch (err: unknown) {
+        if (!stillHere()) return;
         const msg =
           err && typeof err === 'object' && 'message' in err
             ? String((err as { message?: string }).message)
@@ -360,6 +423,10 @@ export default function Dashboard() {
   }, [loadDashboardData]);
 
   useEffect(() => {
+    if (!supabase) {
+      setRealtimeStatus('error');
+      return;
+    }
     setRealtimeStatus('connecting');
     const dashboardChannel = supabase
       .channel('dashboard-sync')
@@ -426,6 +493,7 @@ export default function Dashboard() {
   }, []);
 
   const handleAction = async (id: string, updates: Partial<Message>) => {
+    if (!supabase) return;
     const { error } = await supabase.from('messages').update(updates).eq('id', id);
     if (!error) {
       setMessages(prev => prev.map(m => m.id === id ? { ...m, ...updates } : m));
@@ -473,6 +541,7 @@ export default function Dashboard() {
   };
 
   const handleOrderUpdate = async (orderRef: string, updates: Partial<Order>) => {
+    if (!supabase) return;
     const { error } = await supabase.from('orders').update(updates).eq('order_ref', orderRef);
     if (!error) {
       setOrders(prev => prev.map(o => (o.order_ref === orderRef ? { ...o, ...updates } : o)));
@@ -1033,10 +1102,13 @@ export default function Dashboard() {
           )}
           {fetchWarnings.length > 0 && (
             <div className="mb-4 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-              <p className="font-semibold text-amber-200">Some tables are missing in this Supabase project</p>
+              <p className="font-semibold text-amber-200">Supabase / sync notices</p>
+              <p className="mt-1 text-xs text-amber-200/75">
+                Not every item means a table is missing — includes RLS, API keys, and transient server errors.
+              </p>
               <ul className="mt-2 list-disc space-y-1 pl-5 text-amber-100/90">
                 {fetchWarnings.map((w, i) => (
-                  <li key={i} className="break-words">
+                  <li key={`${i}-${w.slice(0, 24)}`} className="break-words">
                     {w}
                   </li>
                 ))}

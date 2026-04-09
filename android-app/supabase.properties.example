@@ -2,6 +2,7 @@
 # Rebuild the APK after editing.
 
 SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
-# Optional fallback if you do not use service role (RLS must allow inserts):
-# SUPABASE_ANON_KEY=your-anon-key
+# Prefer anon/publishable key on the phone; service role is powerful — only for private builds.
+# SUPABASE_SERVICE_ROLE_KEY=
+SUPABASE_ANON_KEY=your-anon-or-sb_publishable_key
+# If SERVICE_ROLE is set, it overrides ANON for REST calls (same as dashboard server).

