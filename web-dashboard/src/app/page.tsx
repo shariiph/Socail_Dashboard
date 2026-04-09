@@ -248,19 +248,16 @@ export default function Dashboard() {
       const stillHere = () => generation === loadDashboardGenerationRef.current;
 
       try {
-        if (!supabaseUrl || !supabaseKey) {
-          if (stillHere()) {
-            setFetchError(
-              'Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY. Restart dev server after editing .env.local.'
-            );
-          }
-          return;
-        }
         if (stillHere()) {
           setFetchError(null);
           setFetchWarnings([]);
         }
         const warnings: string[] = [];
+        if (!supabaseUrl || !supabaseKey) {
+          warnings.push(
+            'Browser Supabase env vars are missing (NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY). Using server APIs only.'
+          );
+        }
 
         let messagesLoaded = false;
         let inboxServerWarning: string | null = null;
