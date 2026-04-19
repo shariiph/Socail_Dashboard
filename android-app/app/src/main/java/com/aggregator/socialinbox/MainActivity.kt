@@ -30,6 +30,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var redactionSwitch: SwitchCompat
     private lateinit var saveFiltersButton: Button
     private lateinit var openDebugButton: Button
+    private lateinit var versionFooter: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -47,6 +48,12 @@ class MainActivity : AppCompatActivity() {
         redactionSwitch = findViewById(R.id.redactionSwitch)
         saveFiltersButton = findViewById(R.id.saveFiltersButton)
         openDebugButton = findViewById(R.id.openDebugButton)
+        versionFooter = findViewById(R.id.versionFooter)
+        versionFooter.text = getString(
+            R.string.app_version_line,
+            BuildConfig.VERSION_NAME,
+            BuildConfig.VERSION_CODE
+        )
 
         grantButton.setOnClickListener {
             startActivity(android.content.Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"))

@@ -21,8 +21,15 @@ const defaultMeta = (packageName: string): AppSourceMeta => {
   };
 };
 
-export function getAppSourceMeta(packageName: string): AppSourceMeta {
-  const p = packageName.toLowerCase();
+export function getAppSourceMeta(packageName: string | null | undefined): AppSourceMeta {
+  const raw = (packageName ?? '').trim();
+  if (!raw) {
+    return {
+      label: 'Unknown app',
+      chipClass: 'bg-slate-800/80 text-slate-200 border-slate-600/60',
+    };
+  }
+  const p = raw.toLowerCase();
 
   const rules: { test: (s: string) => boolean; meta: AppSourceMeta }[] = [
     { test: (s) => s.includes('whatsapp'), meta: { label: 'WhatsApp', chipClass: 'bg-emerald-500/15 text-emerald-200 border-emerald-500/35' } },
@@ -48,7 +55,7 @@ export function getAppSourceMeta(packageName: string): AppSourceMeta {
     if (test(p)) return meta;
   }
 
-  return defaultMeta(packageName);
+  return defaultMeta(raw);
 }
 
 export function appSourcePillClass(meta: AppSourceMeta): string {

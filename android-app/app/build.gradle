@@ -11,8 +11,8 @@ android {
         applicationId "com.aggregator.socialinbox"
         minSdk 26
         targetSdk 34
-        versionCode 2
-        versionName "1.1"
+        versionCode 3
+        versionName "1.2"
 
         // Supabase: env vars > gradle.properties > supabase.properties (see supabase.properties.example)
         def supaProps = new Properties()

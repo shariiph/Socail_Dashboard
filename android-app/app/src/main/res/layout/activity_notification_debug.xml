@@ -14,6 +14,16 @@
         android:textSize="13sp"
         android:layout_marginBottom="12dp" />
 
+    <TextView
+        android:id="@+id/debugVersionText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="10dp"
+        android:gravity="center"
+        android:textColor="#64748B"
+        android:textIsSelectable="true"
+        android:textSize="12sp" />
+
     <ListView
         android:id="@+id/debugList"
         android:layout_width="match_parent"

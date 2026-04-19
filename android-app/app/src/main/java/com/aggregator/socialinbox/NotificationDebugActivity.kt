@@ -3,6 +3,7 @@ package com.aggregator.socialinbox
 import android.os.Bundle
 import android.widget.ArrayAdapter
 import android.widget.ListView
+import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -16,6 +17,11 @@ class NotificationDebugActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_notification_debug)
         listView = findViewById(R.id.debugList)
+        findViewById<TextView>(R.id.debugVersionText).text = getString(
+            R.string.app_version_line,
+            BuildConfig.VERSION_NAME,
+            BuildConfig.VERSION_CODE
+        )
         refresh()
     }
 

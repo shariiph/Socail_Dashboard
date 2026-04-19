@@ -42,4 +42,5 @@
     <string name="capture_device_register_failed">Device not registered</string>
     <string name="capture_uploaded">Uploaded</string>
     <string name="worker_scheduled_hint">SMS/call backup sync runs about every 15 minutes when online.</string>
+    <string name="app_version_line">App version %1$s (build %2$d)</string>
 </resources>

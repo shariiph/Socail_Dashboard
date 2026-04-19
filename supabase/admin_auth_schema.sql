@@ -35,6 +35,11 @@ insert into public.admin_security_settings (key, value)
 values ('allowed_ips', '[]'::jsonb)
 on conflict (key) do nothing;
 
+-- RLS: anon/authenticated have no policies (deny). service_role bypasses RLS (dashboard server).
+alter table public.admin_users enable row level security;
+alter table public.admin_audit_logs enable row level security;
+alter table public.admin_security_settings enable row level security;
+
 -- Optional bootstrap admin from env values (replace placeholders first)
 -- insert into public.admin_users (username, password_hash, salt)
 -- values ('shariiph', '<hash>', '<salt>');

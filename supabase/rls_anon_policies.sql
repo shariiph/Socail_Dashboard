@@ -7,6 +7,9 @@
 -- RLS with no matching policy returns **zero rows** for SELECT without surfacing an error in the client.
 --
 -- Prerequisite: tables exist (run schema.sql or setup_complete.sql + messages from schema.sql).
+--
+-- Admin tables (admin_users, admin_audit_logs, admin_security_settings): run admin_tables_rls.sql
+-- so Security Advisor does not flag RLS disabled; those tables must not grant anon policies.
 
 -- devices (Android registers here before inserting messages)
 alter table public.devices enable row level security;

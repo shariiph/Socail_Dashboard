@@ -312,6 +312,10 @@ export default function Dashboard() {
             'Social messages: server inbox request failed (network or 5xx). Using browser Supabase as fallback.';
         }
 
+        if (inboxServerWarning && !messagesLoaded && !supabase) {
+          warnings.push(inboxServerWarning);
+        }
+
         if (supabase) {
           if (!messagesLoaded) {
             const { data: msgData, error: msgError } = await supabase
@@ -431,6 +435,7 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
+    if (!sessionChecked) return;
     loadDashboardData();
     const pollMs = 25000;
     const pollTimer = window.setInterval(() => {
@@ -444,7 +449,7 @@ export default function Dashboard() {
       window.clearInterval(pollTimer);
       document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [loadDashboardData]);
+  }, [loadDashboardData, sessionChecked]);
 
   useEffect(() => {
     if (!supabase) {
@@ -575,8 +580,9 @@ export default function Dashboard() {
   const inboxAppFilters = useMemo(() => {
     const seen = new Map<string, string>();
     for (const m of messages) {
-      if (!seen.has(m.app_source)) {
-        seen.set(m.app_source, getAppSourceMeta(m.app_source).label);
+      const key = m.app_source || '';
+      if (!seen.has(key)) {
+        seen.set(key, getAppSourceMeta(key).label);
       }
     }
     return Array.from(seen.entries()).sort((a, b) => a[1].localeCompare(b[1]));
@@ -585,20 +591,22 @@ export default function Dashboard() {
   const filteredMessages = useMemo(() => {
     const q = searchQuery.toLowerCase().trim();
     return messages.filter((m) => {
+      const appSrc = m.app_source || '';
       const matchesDevice =
         messageDeviceFilter === 'all' || (m.device_id || '') === messageDeviceFilter;
-      const matchesTab = activeTab === 'all' || m.app_source === activeTab;
-      const meta = getAppSourceMeta(m.app_source);
+      const matchesTab = activeTab === 'all' || appSrc === activeTab;
+      const meta = getAppSourceMeta(appSrc);
       const matchesSearch =
         !q ||
         (m.sender_name || '').toLowerCase().includes(q) ||
         (m.message_text || '').toLowerCase().includes(q) ||
-        m.app_source.toLowerCase().includes(q) ||
+        appSrc.toLowerCase().includes(q) ||
         meta.label.toLowerCase().includes(q);
       const isRead = !!m.is_read;
       const isArchived = !!m.archived;
       let matchesStatus = false;
-      if (activeStatus === 'all') matchesStatus = !isArchived;
+      // "All" should really include archived too; otherwise users can have hidden social rows.
+      if (activeStatus === 'all') matchesStatus = true;
       else if (activeStatus === 'unread') matchesStatus = !isRead && !isArchived;
       else if (activeStatus === 'read') matchesStatus = isRead && !isArchived;
       else if (activeStatus === 'archived') matchesStatus = isArchived;
@@ -940,9 +948,9 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="flex h-screen bg-[#050510] text-slate-100 font-sans overflow-hidden">
+    <div className="relative flex h-screen overflow-hidden bg-[#050510] font-sans text-slate-100">
       {/* Sidebar */}
-      <aside className="w-20 lg:w-64 border-r border-slate-800 flex flex-col items-center lg:items-stretch bg-[#0A0A1F] z-20">
+      <aside className="z-20 flex w-20 shrink-0 flex-col items-center border-r border-slate-800 bg-[#0A0A1F] lg:w-64 lg:items-stretch">
         <div className="p-6">
           <h1 className="text-xl font-bold hidden lg:block bg-gradient-to-r from-amber-200 via-amber-400 to-indigo-400 bg-clip-text text-transparent">Wallet Hub</h1>
           <div className="lg:hidden rounded-xl bg-gradient-to-br from-amber-500/30 to-indigo-600/40 p-2 ring-1 ring-amber-500/20">
@@ -1018,29 +1026,45 @@ export default function Dashboard() {
         </nav>
       </aside>
 
-      {/* Main Container */}
-      <div className="flex-1 flex flex-col min-w-0">
-        <header className="h-16 border-b border-slate-800 flex items-center justify-between px-8 bg-[#0A0A1F]/80 backdrop-blur-xl z-10">
-          <div className="flex items-center space-x-6">
-            <h2 className="text-lg font-semibold capitalize">{viewTitle}</h2>
+      {/* Main Container — explicit bg so AnimatePresence gaps are never browser-white */}
+      <div className="relative z-0 flex min-h-0 min-w-0 flex-1 flex-col bg-[#050510]">
+        <header className="relative z-50 shrink-0 border-b border-slate-800 bg-[#0A0A1F] shadow-sm isolate">
+          <div className="mx-auto flex w-full max-w-7xl flex-col gap-3 px-4 py-3 sm:px-6 md:min-h-[4rem] md:flex-row md:items-center md:justify-between md:gap-4 md:py-2 lg:px-8 2xl:max-w-[90rem]">
+          <div className="flex min-w-0 flex-col gap-2 md:flex-row md:items-center md:gap-4">
+            <h2 className="shrink-0 text-base font-semibold capitalize sm:text-lg">{viewTitle}</h2>
             {currentView === 'inbox' && (
-              <div className="flex bg-slate-800/50 p-1 rounded-lg flex-wrap gap-1">
-                <button onClick={() => setActiveStatus('all')} className={`px-4 py-1 rounded-md text-xs font-medium transition-all ${activeStatus === 'all' ? 'bg-indigo-500 text-white shadow-lg' : 'text-slate-500'}`}>All</button>
-                <button onClick={() => setActiveStatus('unread')} className={`px-4 py-1 rounded-md text-xs font-medium transition-all ${activeStatus === 'unread' ? 'bg-indigo-500 text-white shadow-lg' : 'text-slate-500'}`}>Unread</button>
-                <button onClick={() => setActiveStatus('read')} className={`px-4 py-1 rounded-md text-xs font-medium transition-all ${activeStatus === 'read' ? 'bg-indigo-500 text-white shadow-lg' : 'text-slate-500'}`}>Read</button>
-                <button onClick={() => setActiveStatus('archived')} className={`px-4 py-1 rounded-md text-xs font-medium transition-all ${activeStatus === 'archived' ? 'bg-indigo-500 text-white shadow-lg' : 'text-slate-500'}`}>Archived</button>
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <span className="hidden shrink-0 text-[10px] font-bold uppercase tracking-wider text-slate-500 md:inline">
+                  Status
+                </span>
+              <div
+                role="tablist"
+                aria-label="Message read status"
+                className="flex max-w-full gap-1 overflow-x-auto rounded-lg bg-slate-800/50 p-1 [-ms-overflow-style:none] [scrollbar-width:none] md:flex-wrap [&::-webkit-scrollbar]:hidden"
+              >
+                <button type="button" role="tab" onClick={() => setActiveStatus('all')} className={`shrink-0 rounded-md px-3 py-1.5 text-xs font-medium transition-all sm:px-4 ${activeStatus === 'all' ? 'bg-indigo-500 text-white shadow-lg' : 'text-slate-500'}`}>All</button>
+                <button type="button" role="tab" onClick={() => setActiveStatus('unread')} className={`shrink-0 rounded-md px-3 py-1.5 text-xs font-medium transition-all sm:px-4 ${activeStatus === 'unread' ? 'bg-indigo-500 text-white shadow-lg' : 'text-slate-500'}`}>Unread</button>
+                <button type="button" role="tab" onClick={() => setActiveStatus('read')} className={`shrink-0 rounded-md px-3 py-1.5 text-xs font-medium transition-all sm:px-4 ${activeStatus === 'read' ? 'bg-indigo-500 text-white shadow-lg' : 'text-slate-500'}`}>Read</button>
+                <button type="button" role="tab" onClick={() => setActiveStatus('archived')} className={`shrink-0 rounded-md px-3 py-1.5 text-xs font-medium transition-all sm:px-4 ${activeStatus === 'archived' ? 'bg-indigo-500 text-white shadow-lg' : 'text-slate-500'}`}>Archived</button>
+              </div>
               </div>
             )}
             {currentView === 'orders' && (
-              <div className="flex bg-slate-800/50 p-1 rounded-lg">
-                <button onClick={() => setActiveOrderStatus('all')} className={`px-4 py-1 rounded-md text-xs font-medium transition-all ${activeOrderStatus === 'all' ? 'bg-amber-500 text-white shadow-lg' : 'text-slate-500'}`}>All</button>
-                <button onClick={() => setActiveOrderStatus('processing')} className={`px-4 py-1 rounded-md text-xs font-medium transition-all ${activeOrderStatus === 'processing' ? 'bg-amber-500 text-white shadow-lg' : 'text-slate-500'}`}>Processing</button>
-                <button onClick={() => setActiveOrderStatus('paid')} className={`px-4 py-1 rounded-md text-xs font-medium transition-all ${activeOrderStatus === 'paid' ? 'bg-amber-500 text-white shadow-lg' : 'text-slate-500'}`}>Paid</button>
-                <button onClick={() => setActiveOrderStatus('failed')} className={`px-4 py-1 rounded-md text-xs font-medium transition-all ${activeOrderStatus === 'failed' ? 'bg-amber-500 text-white shadow-lg' : 'text-slate-500'}`}>Failed</button>
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <span className="hidden shrink-0 text-[10px] font-bold uppercase tracking-wider text-slate-500 md:inline">
+                  Filter
+                </span>
+              <div className="flex max-w-full gap-1 overflow-x-auto rounded-lg bg-slate-800/50 p-1 [-ms-overflow-style:none] [scrollbar-width:none] md:flex-wrap [&::-webkit-scrollbar]:hidden">
+                <button type="button" onClick={() => setActiveOrderStatus('all')} className={`shrink-0 rounded-md px-3 py-1.5 text-xs font-medium transition-all sm:px-4 ${activeOrderStatus === 'all' ? 'bg-amber-500 text-white shadow-lg' : 'text-slate-500'}`}>All</button>
+                <button type="button" onClick={() => setActiveOrderStatus('processing')} className={`shrink-0 rounded-md px-3 py-1.5 text-xs font-medium transition-all sm:px-4 ${activeOrderStatus === 'processing' ? 'bg-amber-500 text-white shadow-lg' : 'text-slate-500'}`}>Processing</button>
+                <button type="button" onClick={() => setActiveOrderStatus('paid')} className={`shrink-0 rounded-md px-3 py-1.5 text-xs font-medium transition-all sm:px-4 ${activeOrderStatus === 'paid' ? 'bg-amber-500 text-white shadow-lg' : 'text-slate-500'}`}>Paid</button>
+                <button type="button" onClick={() => setActiveOrderStatus('failed')} className={`shrink-0 rounded-md px-3 py-1.5 text-xs font-medium transition-all sm:px-4 ${activeOrderStatus === 'failed' ? 'bg-amber-500 text-white shadow-lg' : 'text-slate-500'}`}>Failed</button>
+              </div>
               </div>
             )}
           </div>
-          <div className="flex flex-wrap items-center gap-2 sm:gap-4">
+          <div className="flex w-full min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end md:w-auto md:shrink-0">
+             <div className="flex flex-wrap items-center gap-2">
              <button
                type="button"
                onClick={() => loadDashboardData({ showRefreshing: true })}
@@ -1058,43 +1082,66 @@ export default function Dashboard() {
              )}
              {realtimeStatus === 'live' ? (
                <div
-                 className="hidden sm:flex items-center bg-emerald-500/10 border border-emerald-500/25 px-3 py-1.5 rounded-full"
+                 className="flex max-w-[10rem] items-center truncate rounded-full border border-emerald-500/25 bg-emerald-500/10 px-2 py-1.5 sm:max-w-none sm:px-3"
                  title="Connected to Supabase Realtime; data also refreshes every 25s and when you return to this tab."
                >
-                 <Activity size={14} className="text-emerald-400 mr-2" />
-                 <span className="text-[10px] font-bold text-emerald-400/90 uppercase tracking-widest">Live sync</span>
+                 <Activity size={14} className="mr-1.5 shrink-0 text-emerald-400 sm:mr-2" />
+                 <span className="truncate text-[10px] font-bold uppercase tracking-wider text-emerald-400/90 sm:tracking-widest">
+                   <span className="sm:hidden">Live</span>
+                   <span className="hidden sm:inline">Live sync</span>
+                 </span>
                </div>
              ) : realtimeStatus === 'error' ? (
                <button
                  type="button"
                  onClick={() => typeof window !== 'undefined' && window.location.reload()}
-                 className="hidden sm:flex items-center bg-amber-500/10 border border-amber-500/25 px-3 py-1.5 rounded-full hover:bg-amber-500/20"
+                 className="flex max-w-[11rem] items-center truncate rounded-full border border-amber-500/25 bg-amber-500/10 px-2 py-1.5 hover:bg-amber-500/20 sm:max-w-none sm:px-3"
                  title="Realtime connection issue; click to reload the page and reconnect. Polling still runs every 25s."
                >
-                 <Wifi size={14} className="text-amber-400 mr-2" />
-                 <span className="text-[10px] font-bold text-amber-300 uppercase tracking-widest">Sync limited — retry</span>
+                 <Wifi size={14} className="mr-1.5 shrink-0 text-amber-400 sm:mr-2" />
+                 <span className="truncate text-[10px] font-bold uppercase tracking-wider text-amber-300 sm:tracking-widest">
+                   <span className="sm:hidden">Retry sync</span>
+                   <span className="hidden sm:inline">Sync limited — retry</span>
+                 </span>
                </button>
              ) : (
-               <div className="hidden sm:flex items-center bg-slate-800/50 border border-slate-700/50 px-3 py-1.5 rounded-full">
-                 <Activity size={14} className="text-slate-500 mr-2 animate-pulse" />
-                 <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Connecting…</span>
+               <div
+                 className="flex max-w-[10rem] items-center truncate rounded-full border border-slate-700/50 bg-slate-800/50 px-2 py-1.5 sm:max-w-none sm:px-3"
+                 title="Connecting to realtime…"
+               >
+                 <Activity size={14} className="mr-1.5 shrink-0 animate-pulse text-slate-500 sm:mr-2" />
+                 <span className="truncate text-[10px] font-bold uppercase tracking-wider text-slate-500 sm:tracking-widest">
+                   <span className="sm:hidden">Wait…</span>
+                   <span className="hidden sm:inline">Connecting…</span>
+                 </span>
                </div>
              )}
              {onlineDevicesCount > 0 ? (
-               <div className="flex items-center bg-green-500/10 border border-green-500/20 px-3 py-1.5 rounded-full">
-                 <Radio size={14} className="text-green-500 mr-2 animate-pulse" />
-                 <span className="text-[10px] font-bold text-green-500 uppercase tracking-widest">{onlineDevicesCount} Devices Live</span>
+               <div
+                 className="flex max-w-full items-center rounded-full border border-green-500/20 bg-green-500/10 px-2.5 py-1.5 sm:px-3"
+                 title={`${onlineDevicesCount} device(s) recently seen`}
+               >
+                 <Radio size={14} className="mr-1.5 shrink-0 animate-pulse text-green-500 sm:mr-2" />
+                 <span className="truncate text-[10px] font-bold uppercase tracking-wider text-green-500 sm:tracking-widest">
+                   <span className="sm:hidden">{onlineDevicesCount} online</span>
+                   <span className="hidden sm:inline">{onlineDevicesCount} Devices Live</span>
+                 </span>
                </div>
              ) : (
-               <div className="flex items-center bg-slate-800/50 border border-slate-700/50 px-3 py-1.5 rounded-full">
-                 <Wifi size={14} className="text-slate-500 mr-2" />
-                 <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">No Devices Connected</span>
+               <div className="flex max-w-full items-center rounded-full border border-slate-700/50 bg-slate-800/50 px-2.5 py-1.5 sm:px-3">
+                 <Wifi size={14} className="mr-1.5 shrink-0 text-slate-500 sm:mr-2" />
+                 <span className="truncate text-[10px] font-bold uppercase tracking-wider text-slate-500 sm:tracking-widest">
+                   <span className="sm:hidden">Offline</span>
+                   <span className="hidden sm:inline">No Devices Connected</span>
+                 </span>
                </div>
              )}
+             </div>
+             <div className="flex flex-wrap items-center gap-2 border-t border-slate-800/80 pt-2 sm:border-t-0 sm:pt-0 md:border-l md:border-slate-800 md:pl-4">
              <Link
                href="/profile"
                title="Profile settings"
-               className="flex max-w-[200px] items-center gap-2 rounded-xl border border-slate-700/80 bg-slate-800/80 py-1 pl-1 pr-3 transition hover:border-indigo-500/40 hover:bg-slate-800"
+               className="flex max-w-[min(200px,45vw)] items-center gap-2 rounded-xl border border-slate-700/80 bg-slate-800/80 py-1 pl-1 pr-3 transition hover:border-indigo-500/40 hover:bg-slate-800 sm:max-w-[200px]"
              >
                {profileAvatar ? (
                  <img
@@ -1119,10 +1166,13 @@ export default function Dashboard() {
              >
                Logout
              </button>
+             </div>
+          </div>
           </div>
         </header>
 
-        <main className="flex-1 overflow-y-auto p-4 lg:p-6 custom-scrollbar relative">
+        <main className="custom-scrollbar relative z-0 min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-[#050510]">
+          <div className="mx-auto w-full max-w-7xl bg-[#050510] px-3 py-3 sm:px-4 sm:py-4 lg:px-6 lg:py-6 2xl:max-w-[90rem] 2xl:px-8">
           {fetchError && (
             <div className="mb-4 rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
               <p className="font-semibold text-rose-200">Could not load data from Supabase</p>
@@ -1147,15 +1197,22 @@ export default function Dashboard() {
               </ul>
             </div>
           )}
-          <AnimatePresence mode="wait">
+          <AnimatePresence>
             {currentView === 'inbox' && (
-              <motion.div key="inbox" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-                <div className="mb-3 rounded-xl border border-slate-800/80 bg-slate-900/40 px-4 py-3 text-xs text-slate-400">
+              <motion.div
+                key="inbox"
+                className="relative z-0"
+                initial={false}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.12 }}
+              >
+                <div className="mb-3 rounded-xl border border-slate-800/80 bg-slate-900/40 px-3 py-2.5 text-[11px] leading-relaxed text-slate-400 sm:px-4 sm:py-3 sm:text-xs">
                   This inbox is for <span className="text-slate-300">social and messenger apps</span> (WhatsApp, Telegram, Facebook / Marketplace, Snapchat, etc.) via notification capture on your phone — not native SMS. Each message is <span className="text-slate-300">tagged by app</span> so you can filter and handle orders by channel.
                 </div>
                 {inboxAppFilters.length > 0 && (
                   <div className="mb-4 flex flex-wrap items-center gap-2">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">App</span>
+                    <span className="shrink-0 text-[10px] font-bold uppercase tracking-wider text-slate-500">App</span>
                     <button
                       type="button"
                       onClick={() => setActiveTab('all')}
@@ -1164,8 +1221,9 @@ export default function Dashboard() {
                           ? 'border-indigo-500/60 bg-indigo-500/15 text-indigo-200 ring-1 ring-indigo-500/30'
                           : 'border-slate-700 bg-slate-900/60 text-slate-400 hover:border-slate-600'
                       }`}
+                      title="Show messages from every app"
                     >
-                      All
+                      All apps
                     </button>
                     {inboxAppFilters.map(([pkg, label]) => {
                       const meta = getAppSourceMeta(pkg);
@@ -1189,22 +1247,22 @@ export default function Dashboard() {
                   </div>
                 )}
                 <div className="mb-4 flex flex-col gap-3">
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                    <div className="relative max-w-md flex-1 group">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
+                  <div className="flex flex-col gap-3 md:flex-row md:items-stretch md:justify-between md:gap-4">
+                    <div className="relative min-w-0 flex-1 group md:max-w-xl lg:max-w-md">
+                      <Search className="pointer-events-none absolute left-3 top-1/2 z-[1] -translate-y-1/2 text-slate-500" size={16} />
                       <input
                         type="text"
-                        placeholder="Search sender, message, or app (e.g. Telegram)..."
+                        placeholder="Search sender, message, or app…"
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        className="w-full rounded-xl border border-slate-800 bg-slate-900 py-2 pl-10 pr-4 text-sm outline-none focus:ring-2 focus:ring-indigo-500/50"
+                        className="w-full rounded-xl border border-slate-800 bg-slate-900 py-2.5 pl-10 pr-3 text-sm outline-none focus:ring-2 focus:ring-indigo-500/50 sm:py-2"
                       />
                     </div>
-                    <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
                       <select
                         value={messageDeviceFilter}
                         onChange={(e) => setMessageDeviceFilter(e.target.value)}
-                        className="rounded-lg border border-slate-700 bg-slate-900/60 px-2.5 py-2 text-xs font-bold text-slate-300"
+                        className="w-full min-w-0 rounded-lg border border-slate-700 bg-slate-900/60 px-2.5 py-2.5 text-xs font-bold text-slate-300 sm:w-auto sm:min-w-[10rem] sm:py-2"
                         title="Filter messages by device"
                       >
                         <option value="all">All devices</option>
@@ -1214,54 +1272,59 @@ export default function Dashboard() {
                           </option>
                         ))}
                       </select>
-                      <button
-                        type="button"
-                        onClick={exportMessagesCsv}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800/80 px-3 py-2 text-xs font-bold text-slate-300 hover:border-slate-600"
-                      >
-                        <Download size={14} /> Export CSV
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setMessageFetchLimit((n) => n + 100)}
-                        className="rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs font-bold text-slate-400 hover:border-slate-600"
-                      >
-                        Load more ({messageFetchLimit} from server)
-                      </button>
+                      <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-row sm:flex-wrap sm:justify-end sm:gap-2">
+                        <button
+                          type="button"
+                          onClick={exportMessagesCsv}
+                          className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800/80 px-3 py-2.5 text-xs font-bold text-slate-300 hover:border-slate-600 sm:w-auto sm:py-2"
+                        >
+                          <Download size={14} /> Export CSV
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setMessageFetchLimit((n) => n + 100)}
+                          className="w-full rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2.5 text-xs font-bold text-slate-400 hover:border-slate-600 sm:w-auto sm:py-2"
+                        >
+                          <span className="sm:hidden">Load more ({messageFetchLimit})</span>
+                          <span className="hidden sm:inline">Load more ({messageFetchLimit} from server)</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
-                  <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-800/80 bg-slate-900/30 px-3 py-2">
-                    <Filter size={14} className="shrink-0 text-slate-500" />
-                    <select
-                      className="max-w-[180px] rounded-lg border border-slate-700 bg-slate-900 px-2 py-1.5 text-xs text-slate-300"
-                      value={savedViewPicker}
-                      onChange={(e) => {
-                        const id = e.target.value;
-                        setSavedViewPicker('');
-                        const v = savedViews.find((s) => s.id === id);
-                        if (v) applySavedView(v);
-                      }}
-                    >
-                      <option value="">
-                        Saved views…
-                      </option>
-                      {savedViews.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.name}
+                  <div className="flex flex-col gap-2 rounded-xl border border-slate-800/80 bg-slate-900/30 p-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-2 sm:p-2">
+                    <div className="flex min-w-0 items-center gap-2 sm:max-w-[min(100%,14rem)] sm:shrink-0">
+                      <Filter size={14} className="shrink-0 text-slate-500" aria-hidden />
+                      <select
+                        className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-900 px-2 py-2 text-xs text-slate-300 sm:flex-none sm:py-1.5"
+                        value={savedViewPicker}
+                        onChange={(e) => {
+                          const id = e.target.value;
+                          setSavedViewPicker('');
+                          const v = savedViews.find((s) => s.id === id);
+                          if (v) applySavedView(v);
+                        }}
+                      >
+                        <option value="">
+                          Saved views…
                         </option>
-                      ))}
-                    </select>
+                        {savedViews.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                     <input
                       type="text"
                       value={savedViewNameDraft}
                       onChange={(e) => setSavedViewNameDraft(e.target.value)}
                       placeholder="Name for current filters"
-                      className="min-w-[120px] flex-1 rounded-lg border border-slate-700 bg-slate-900 px-2 py-1.5 text-xs text-slate-300"
+                      className="w-full min-w-0 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-slate-300 sm:flex-1 sm:py-1.5"
                     />
                     <button
                       type="button"
                       onClick={saveCurrentView}
-                      className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-indigo-500"
+                      className="w-full shrink-0 rounded-lg bg-indigo-600 px-3 py-2.5 text-xs font-bold text-white hover:bg-indigo-500 sm:w-auto sm:py-1.5"
                     >
                       Save view
                     </button>
@@ -1276,7 +1339,7 @@ export default function Dashboard() {
                           No messages match your filters
                         </p>
                         <p className="text-xs leading-relaxed not-italic">
-                          Try <span className="text-slate-400">All</span> app chip,{' '}
+                          Try <span className="text-slate-400">All apps</span>,{' '}
                           <span className="text-slate-400">All devices</span>, clear search, and set status to{' '}
                           <span className="text-slate-400">Active</span> (non-archived).
                         </p>
@@ -1310,10 +1373,15 @@ export default function Dashboard() {
                           </p>
                         ) : null}
                         {!healthSnapshot?.supabaseAdminConfigured ? (
-                          <p className="text-[11px] leading-relaxed text-slate-500 not-italic">
-                            Tip: set <span className="font-mono text-slate-400">SUPABASE_SERVICE_ROLE_KEY</span> in{' '}
-                            <span className="font-mono text-slate-400">.env.local</span> so this dashboard can compare
-                            server row counts with what the browser loads (spots RLS vs empty table).
+                          <p className="rounded-xl border border-rose-500/35 bg-rose-500/10 px-3 py-2 text-xs leading-relaxed text-rose-100 not-italic">
+                            <span className="font-semibold text-rose-200">Server inbox API is off.</span> Set{' '}
+                            <span className="font-mono text-rose-100/90">SUPABASE_SERVICE_ROLE_KEY</span> (or{' '}
+                            <span className="font-mono text-rose-100/90">SUPABASE_SECRET_KEY</span>) in{' '}
+                            <span className="font-mono text-slate-300">web-dashboard/.env.local</span> and on Netlify —
+                            Supabase → Project Settings → API → <strong>secret</strong> service_role key, not the
+                            publishable anon key. Restart <span className="font-mono">npm run dev</span>. Without it,
+                            social messages load only via the browser key; if that returns nothing, run{' '}
+                            <span className="font-mono">supabase/rls_anon_policies.sql</span> in the SQL editor.
                           </p>
                         ) : null}
                         <p className="text-xs leading-relaxed not-italic">
@@ -2061,6 +2129,7 @@ export default function Dashboard() {
               </motion.div>
             )}
           </AnimatePresence>
+          </div>
         </main>
       </div>
 
@@ -2068,11 +2137,11 @@ export default function Dashboard() {
       <AnimatePresence>
         {selectedOrder && (
           <motion.aside
-            initial={{ x: 320 }}
+            initial={{ x: 360 }}
             animate={{ x: 0 }}
-            exit={{ x: 320 }}
+            exit={{ x: 360 }}
             key="order-detail"
-            className="w-80 lg:w-96 border-l border-slate-800 bg-[#0A0A1F] shadow-[-20px_0_40px_rgba(0,0,0,0.5)] z-30 flex flex-col"
+            className="fixed inset-y-0 right-0 z-[60] flex h-full w-[min(100vw,22rem)] flex-col border-l border-slate-800 bg-[#0A0A1F] shadow-2xl lg:relative lg:z-30 lg:w-96 lg:max-w-none lg:shadow-[-20px_0_40px_rgba(0,0,0,0.5)]"
           >
             <div className="p-6 border-b border-slate-800 flex items-center justify-between">
               <h3 className="font-bold text-lg">Order Detail</h3>
@@ -2211,11 +2280,11 @@ export default function Dashboard() {
 
         {selectedMessage && (
           <motion.aside
-            initial={{ x: 320 }}
+            initial={{ x: 360 }}
             animate={{ x: 0 }}
-            exit={{ x: 320 }}
+            exit={{ x: 360 }}
             key="message-detail"
-            className="w-80 lg:w-96 border-l border-slate-800 bg-[#0A0A1F] shadow-[-20px_0_40px_rgba(0,0,0,0.5)] z-30 flex flex-col"
+            className="fixed inset-y-0 right-0 z-[60] flex h-full w-[min(100vw,22rem)] flex-col border-l border-slate-800 bg-[#0A0A1F] shadow-2xl lg:relative lg:z-30 lg:w-96 lg:max-w-none lg:shadow-[-20px_0_40px_rgba(0,0,0,0.5)]"
           >
             <div className="p-6 border-b border-slate-800 flex items-center justify-between">
               <h3 className="font-bold text-lg">Message Detail</h3>
