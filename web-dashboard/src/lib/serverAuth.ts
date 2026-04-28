@@ -15,11 +15,9 @@ export function sessionSecret(): string {
 }
 
 export function authConfigured(): boolean {
-  return Boolean(
-    expectedUsername() &&
-      expectedPassword().length >= 12 &&
-      sessionSecret().length >= 32
-  );
+  // Login can be backed by env credentials, Supabase admin_users, or runtime store.
+  // The only universal requirement is a strong session signing secret.
+  return sessionSecret().length >= 32;
 }
 
 export function hasValidSessionCookie(): boolean {
